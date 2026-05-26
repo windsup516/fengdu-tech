@@ -16,10 +16,24 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Theos
+      - name: Install Theos manually
         run: |
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+          export THEOS=$HOME/theos
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+          brew update || true
+          brew install ldid xz || true
+
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+
+          mkdir -p "$THEOS/sdks"
+          curl -L --retry 5 --retry-delay 5 \
+            -o /tmp/iPhoneOS16.5.sdk.tar.xz \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+
+          tar -xJf /tmp/iPhoneOS16.5.sdk.tar.xz -C "$THEOS/sdks"
+
+          ls -la "$THEOS/sdks"
 
       - name: Build
         working-directory: DeltaForce_TrollKit
