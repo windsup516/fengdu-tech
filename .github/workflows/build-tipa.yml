@@ -1,0 +1,44 @@
+name: Build Star.tipa
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Theos
+        run: |
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Build
+        working-directory: DeltaForce_TrollKit
+        run: |
+          export THEOS=$HOME/theos
+          make clean
+          make package
+
+      - name: Show output files
+        working-directory: DeltaForce_TrollKit
+        run: |
+          find . -type f \( -name "*.tipa" -o -name "*.ipa" -o -name "*.deb" \) -print
+
+      - name: Upload .tipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: Star.tipa
+          path: |
+            DeltaForce_TrollKit/**/*.tipa
+            DeltaForce_TrollKit/**/*.ipa
+            DeltaForce_TrollKit/**/*.deb
+          if-no-files-found: warn
