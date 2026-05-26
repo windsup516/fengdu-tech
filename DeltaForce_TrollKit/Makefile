@@ -2,8 +2,8 @@
 # Build: make package
 # Output: Star.tipa (TrollStore 安装包)
 
-ARCHS = arm64 arm64e
-TARGET = iphone:15.0:13.0
+ARCHS = arm64
+TARGET = iphone:14.0
 DEBUG = 0
 FINAL_PACKAGE = 1
 
