@@ -1,0 +1,76 @@
+# Stocks.app — GitHub Actions 自动编译
+# 基于 Theos (iOS 越狱应用构建系统)
+# 输出: Stocks.tipa (TrollStore 安装包)
+
+name: Build Stocks.tipa
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  build:
+    runs-on: macos-14  # macOS 14 Sonoma + arm64 (M芯片)
+    # 或使用 macos-13 (Intel), 但 macos-14 更快
+
+    steps:
+      # 步骤1: 检出代码 (包含 Frameworks/ 下的 .dylib)
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: 'false'
+
+      # 步骤2: 安装 Theos 及其依赖
+      - name: Install Theos
+        run: |
+          # 创建 Theos 目录
+          sudo mkdir -p /opt/theos
+          sudo chown $(whoami) /opt/theos
+
+          # 克隆 Theos (使用 GitHub mirror)
+          git clone --recursive --depth=1 \
+            https://github.com/theos/theos.git /opt/theos
+
+          # 下载 iOS SDK (需要 GitHub Token 以防限流)
+          # Theos 需要 iPhoneOS SDK
+          # 如果 GitHub Actions 内无法下载, 使用预缓存的 SDK
+          # 这里使用 theos 自带的 sdks 脚本
+          cd /opt/theos
+          ./vendor/sdks/install.sh
+
+      # 步骤3: 缓存 Theos SDK (加速后续构建)
+      - name: Cache Theos SDK
+        uses: actions/cache@v4
+        id: theos-cache
+        with:
+          path: |
+            /opt/theos/sdks
+          key: ${{ runner.os }}-theos-sdks
+
+      # 步骤4: 构建
+      - name: Build Stocks.app
+        run: |
+          cd DeltaForce_TrollKit
+          export THEOS=/opt/theos
+          make package FINAL_PACKAGE=1
+
+      # 步骤5: 上传编译产物 (.tipa)
+      - name: Upload .tipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stocks-${{ github.sha }}
+          path: DeltaForce_TrollKit/Stocks.tipa
+          if-no-files-found: error
+
+      # 步骤6: 可选 — 上传 .deb (Theos 默认输出)
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: Stocks-deb-${{ github.sha }}
+          path: DeltaForce_TrollKit/*.deb
+          if-no-files-found: ignore
