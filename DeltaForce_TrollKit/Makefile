@@ -3,7 +3,7 @@
 # Output: Star.tipa (TrollStore 安装包)
 
 ARCHS = arm64
-TARGET = iphone:14.0
+TARGET = iphone:17.0
 DEBUG = 0
 FINAL_PACKAGE = 1
 
