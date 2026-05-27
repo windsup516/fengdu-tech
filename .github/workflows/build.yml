@@ -1,7 +1,3 @@
-# Stocks.app — GitHub Actions 自动编译
-# 基于 Theos (iOS 越狱应用构建系统)
-# 输出: Stocks.tipa (TrollStore 安装包)
-
 name: Build Stocks.tipa
 
 on:
@@ -16,60 +12,64 @@ jobs:
   build:
     runs-on: macos-14
 
+    env:
+      THEOS: /opt/theos
+
     steps:
-      # 步骤1: 检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      # 步骤2: 安装 Theos
+      - name: Install dependencies
+        run: |
+          brew install ldid xz || true
+
       - name: Install Theos
         run: |
+          sudo rm -rf /opt/theos
           sudo mkdir -p /opt/theos
-          sudo chown $(whoami) /opt/theos
-          git clone --recursive --depth=1 \
-            https://github.com/theos/theos.git /opt/theos
+          sudo chown -R $(whoami) /opt/theos
 
-      # 步骤3: 下载 iOS SDK
+          git clone --recursive --depth=1 https://github.com/theos/theos.git /opt/theos
+
+          echo "THEOS=/opt/theos" >> $GITHUB_ENV
+
       - name: Download iOS SDK
         run: |
           mkdir -p /opt/theos/sdks
-          SDK_URL="https://github.com/theos/sdks/releases/latest/download/iPhoneOS17.0.sdk.tar.xz"
+
+          SDK_URL="https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
+
           echo "Downloading SDK from: $SDK_URL"
-          curl -L -o /tmp/sdk.tar.xz "$SDK_URL"
-          echo "Extracting SDK..."
+          curl -fL --retry 5 --retry-delay 5 -o /tmp/sdk.tar.xz "$SDK_URL"
+
+          ls -lh /tmp/sdk.tar.xz
+          file /tmp/sdk.tar.xz
+
           tar -xJf /tmp/sdk.tar.xz -C /opt/theos/sdks/
+
           echo "SDK installed:"
           ls -la /opt/theos/sdks/
 
-      # 步骤4: 缓存 Theos
-      - name: Cache Theos
-        uses: actions/cache@v4
-        id: theos-cache
-        with:
-          path: |
-            /opt/theos
-          key: ${{ runner.os }}-theos-full
-
-      # 步骤5: 构建
       - name: Build Stocks.app
+        working-directory: DeltaForce_TrollKit
         run: |
-          cd DeltaForce_TrollKit
           export THEOS=/opt/theos
+          make clean || true
           make package FINAL_PACKAGE=1
 
-      # 步骤6: 上传 .tipa
-      - name: Upload .tipa artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Stocks-${{ github.sha }}
-          path: DeltaForce_TrollKit/*.tipa
-          if-no-files-found: error
+      - name: Show output files
+        working-directory: DeltaForce_TrollKit
+        run: |
+          find . -type f \( -name "*.tipa" -o -name "*.ipa" -o -name "*.deb" \) -print
 
-      # 步骤7: 上传 .deb
-      - name: Upload .deb artifact
+      - name: Upload package artifact
         uses: actions/upload-artifact@v4
-        continue-on-error: true
         with:
-          name: Stocks-deb-${{ github.sha }}
-          path: DeltaForce_TrollKit/*.deb
-          if-no-files-found: ignore
+          name: Stocks-package-${{ github.sha }}
+          path: |
+            DeltaForce_TrollKit/**/*.tipa
+            DeltaForce_TrollKit/**/*.ipa
+            DeltaForce_TrollKit/**/*.deb
+          if-no-files-found: error
