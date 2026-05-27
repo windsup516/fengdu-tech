@@ -56,14 +56,7 @@ Stocks_CODESIGN_FLAGS = -Ssign.plist
 
 include $(THEOS_MAKE_PATH)/application.mk
 
-# 打包 .tipa (伪装为 Stocks.app)
-after-package::
-	@echo "==> 打包 .tipa for TrollStore..."
-	@mkdir -p $(THEOS_STAGING_DIR)/Payload/Stocks.app
-	@cp -r $(THEOS_STAGING_DIR)/Applications/Stocks.app/* $(THEOS_STAGING_DIR)/Payload/Stocks.app/
-	@cp Info.plist $(THEOS_STAGING_DIR)/Payload/Stocks.app/
-	@cp -r Frameworks $(THEOS_STAGING_DIR)/Payload/Stocks.app/ 2>/dev/null || true
-	@cd $(THEOS_STAGING_DIR) && rm -f Stocks.tipa && zip -r Stocks.tipa Payload/
-	@mkdir -p $(THEOS_OBJ_DIR)
-	@cp $(THEOS_STAGING_DIR)/Stocks.tipa $(THEOS_OBJ_DIR)/Stocks.tipa 2>/dev/null || true
-	@echo "==> 完成: $(THEOS_OBJ_DIR)/Stocks.tipa"
+# 打包 .tipa (TrollStore 安装包, 伪装为 Stocks.app)
+# 用法: make && make tipa
+# 或:    make package (额外输出 .deb, 需 control 文件)
+tipa::
