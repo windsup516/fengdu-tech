@@ -61,14 +61,22 @@ include $(THEOS_MAKE_PATH)/application.mk
 # 同时删除 .deb 避免混淆
 after-package::
 	@echo "==> 打包 Stocks.tipa for TrollStore..."
+	@echo "==> 1. 检查 staging 目录"
+	@ls -la $(THEOS_STAGING_DIR)/Applications/Stocks.app/ 2>/dev/null || echo "(staging 空)"
+	@echo "==> 2. 检查 Frameworks 目录"
+	@ls -la Frameworks/ 2>/dev/null || echo "(无 Frameworks)"
 	@rm -rf /tmp/Stocks.tipa.work
 	@mkdir -p /tmp/Stocks.tipa.work/Payload/Stocks.app
 	@cp -rL $(THEOS_STAGING_DIR)/Applications/Stocks.app/* /tmp/Stocks.tipa.work/Payload/Stocks.app/
 	@cp Info.plist /tmp/Stocks.tipa.work/Payload/Stocks.app/
 	@if [ -d Frameworks ]; then \
-		cp -r Frameworks /tmp/Stocks.tipa.work/Payload/Stocks.app/ 2>/dev/null || true; \
+		echo "==> 复制 Frameworks..."; \
+		cp -r Frameworks /tmp/Stocks.tipa.work/Payload/Stocks.app/; \
 	fi
-	@cd /tmp/Stocks.tipa.work && rm -f Stocks.tipa && zip -r Stocks.tipa Payload/ >/dev/null 2>&1
+	@echo "==> 3. 打包前文件列表:"
+	@find /tmp/Stocks.tipa.work/Payload -type f -exec ls -lh {} \; 2>/dev/null | head -20
+	@cd /tmp/Stocks.tipa.work && rm -f Stocks.tipa && zip -r Stocks.tipa Payload/
+	@ls -lh /tmp/Stocks.tipa.work/Stocks.tipa
 	@mkdir -p $(THEOS_PACKAGE_DIR)
 	@cp /tmp/Stocks.tipa.work/Stocks.tipa $(THEOS_PACKAGE_DIR)/Stocks.tipa
 	@rm -rf /tmp/Stocks.tipa.work
