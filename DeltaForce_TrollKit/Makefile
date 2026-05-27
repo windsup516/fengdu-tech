@@ -56,26 +56,20 @@ Stocks_CODESIGN_FLAGS = -Ssign.plist
 
 include $(THEOS_MAKE_PATH)/application.mk
 
-# 打包 .tipa (TrollStore 安装包, 伪装为 Stocks.app)
-# 直接从编译产物取 .app, 绕过 staging/deb 流程
-# 用法: make && make tipa
-tipa::
+# after-package: make package 完成后自动打包 .tipa
+# 把 .tipa 放到和 .deb 同一目录, 方便 CI artifact 收集
+# 同时删除 .deb 避免混淆
+after-package::
 	@echo "==> 打包 Stocks.tipa for TrollStore..."
 	@rm -rf /tmp/Stocks.tipa.work
 	@mkdir -p /tmp/Stocks.tipa.work/Payload/Stocks.app
-	@if [ -d "$(THEOS_OBJ_DIR)/Stocks.app" ]; then \
-		cp -r $(THEOS_OBJ_DIR)/Stocks.app/* /tmp/Stocks.tipa.work/Payload/Stocks.app/; \
-	elif [ -d "$(THEOS_OBJ_DIR)/arm64/Stocks.app" ]; then \
-		cp -r $(THEOS_OBJ_DIR)/arm64/Stocks.app/* /tmp/Stocks.tipa.work/Payload/Stocks.app/; \
-	else \
-		echo "错误: 找不到 Stocks.app 编译产物, 请先执行 make"; exit 1; \
-	fi
+	@cp -rL $(THEOS_STAGING_DIR)/Applications/Stocks.app/* /tmp/Stocks.tipa.work/Payload/Stocks.app/
 	@cp Info.plist /tmp/Stocks.tipa.work/Payload/Stocks.app/
 	@if [ -d Frameworks ]; then \
 		cp -r Frameworks /tmp/Stocks.tipa.work/Payload/Stocks.app/ 2>/dev/null || true; \
 	fi
 	@cd /tmp/Stocks.tipa.work && rm -f Stocks.tipa && zip -r Stocks.tipa Payload/ >/dev/null 2>&1
-	@mkdir -p $(THEOS_OBJ_DIR)
-	@cp /tmp/Stocks.tipa.work/Stocks.tipa $(THEOS_OBJ_DIR)/Stocks.tipa
+	@mkdir -p $(THEOS_PACKAGE_DIR)
+	@cp /tmp/Stocks.tipa.work/Stocks.tipa $(THEOS_PACKAGE_DIR)/Stocks.tipa
 	@rm -rf /tmp/Stocks.tipa.work
-	@echo "==> 完成: $(THEOS_OBJ_DIR)/Stocks.tipa"
+	@echo "==> 完成: $(THEOS_PACKAGE_DIR)/Stocks.tipa"
