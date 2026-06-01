@@ -18,21 +18,17 @@ jobs:
       - name: Prepare CJK Font
         run: |
           mkdir -p Resources
-          # macOS 自带 PingFang (苹方), 直接复制
-          if [ -f "/System/Library/Fonts/PingFang.ttc" ]; then
-            cp "/System/Library/Fonts/PingFang.ttc" Resources/CJKFont.ttc
-            echo "Using PingFang.ttc ($(du -h Resources/CJKFont.ttc | cut -f1))"
-          elif [ -f "/System/Library/Fonts/STHeiti Light.ttc" ]; then
-            cp "/System/Library/Fonts/STHeiti Light.ttc" Resources/CJKFont.ttc
-            echo "Using STHeiti Light.ttc ($(du -h Resources/CJKFont.ttc | cut -f1))"
+          # 优先用项目自带字体, 否则下载思源黑体 (~8MB)
+          if [ -f "Resources/CJKFont.ttc" ] || [ -f "Resources/CJKFont.otf" ]; then
+            echo "Font already in Resources/, skipping download"
+            ls -lh Resources/
           else
-            # 备选: 下载思源黑体
-            curl -L --retry 3 --retry-delay 5 \
+            echo "Downloading SourceHanSansSC-Regular.otf..."
+            curl -L --retry 5 --retry-delay 10 \
               -o Resources/CJKFont.otf \
               "https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf"
-            echo "Downloaded SourceHanSansSC-Regular.otf"
+            ls -lh Resources/
           fi
-          ls -lh Resources/
 
       - name: Install tools
         run: brew install ldid xz || true
