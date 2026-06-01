@@ -37,6 +37,7 @@ uint64_t xpf_scan_game_memory(mach_port_t task, const char *pattern, size_t leng
 mach_port_t hooks_get_game_task(void);
 pid_t hooks_get_game_pid(void);
 BOOL hooks_is_attached(void);
+NSString *hooks_get_game_path(void);
 
 #ifdef __cplusplus
 }

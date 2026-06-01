@@ -8,6 +8,7 @@
 #import <mach/vm_map.h>
 #import <mach-o/loader.h>
 #import <sys/sysctl.h>
+#import <libproc.h>
 #import <dlfcn.h>
 
 #ifndef GAME_PROCESS_NAME
@@ -406,6 +407,20 @@ static kern_return_t game_write(mach_port_t task, uint64_t addr, const void *buf
 mach_port_t hooks_get_game_task(void) { return g_gameTask; }
 pid_t hooks_get_game_pid(void) { return g_gamePid; }
 BOOL hooks_is_attached(void) { return g_attached; }
+
+NSString *hooks_get_game_path(void) {
+    if (g_gamePid <= 0) return nil;
+    char pathbuf[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    int ret = proc_pidpath(g_gamePid, pathbuf, sizeof(pathbuf));
+    if (ret <= 0) {
+        NSLog(@"[Hooks] proc_pidpath(%d) failed: %d (%s)", g_gamePid, ret, strerror(errno));
+        return nil;
+    }
+    // pathbuf = /var/.../DeltaForceClient.app/DeltaForceClient
+    NSString *execPath = [NSString stringWithUTF8String:pathbuf];
+    // .app 目录就是父目录
+    return [execPath stringByDeletingLastPathComponent];
+}
 
 // XPF 兼容的内核附加 (TrollStore 下仅回退到 task_for_pid)
 __unused static kern_return_t game_hooks_attach_kernel_task(uint64_t proc, mach_port_t *task) {

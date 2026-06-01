@@ -331,137 +331,15 @@ static void install_crash_handlers(void) {
     return NO;
 }
 
-// 探查三角洲行动 App Bundle — 寻找可用于 dylib 注入的目标
-- (void)inspectGameBundle {
-    SAFE_LOG("=== 开始探查 DeltaForceClient.app ===");
-
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *gamePath = nil;
-
-    // 方法1: 遍历 allApplications 获取游戏 bundle 路径
-    // iOS 15+ 上 applicationProxyForIdentifier: 不存在，改用 allApplications 遍历
-    Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
-    if (workspaceClass) {
-        id workspace = [workspaceClass performSelector:@selector(defaultWorkspace)];
-
-        // 先检查 allApplications 是否可用
-        NSArray *allApps = nil;
-        @try {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-            allApps = [workspace performSelector:@selector(allApplications)];
-#pragma clang diagnostic pop
-        } @catch (NSException *e) {
-            SAFE_LOG("allApplications 异常: %s", [[e description] UTF8String]);
-        }
-        SAFE_LOG("allApplications count: %lu", (unsigned long)[allApps count]);
-
-        for (id app in allApps) {
-            @try {
-                // 用 valueForKey 获取 bundleIdentifier (兼容不同 iOS 版本)
-                NSString *bundleID = [app valueForKey:@"bundleIdentifier"];
-                if (!bundleID) bundleID = [app valueForKey:@"applicationIdentifier"];
-                if (!bundleID) {
-                    // 尝试 performSelector 方式
-                    if ([app respondsToSelector:@selector(bundleIdentifier)]) {
-                        bundleID = [app performSelector:@selector(bundleIdentifier)];
-                    }
-                }
-
-                BOOL isDelta = [bundleID containsString:@"dfm"]
-                            || [bundleID containsString:@"deltaforce"]
-                            || [bundleID containsString:@"DeltaForce"]
-                            || [bundleID containsString:@"tmgp"];
-
-                if (!isDelta) continue;
-
-                SAFE_LOG("找到游戏代理: bundleID=%s class=%s",
-                         [bundleID UTF8String],
-                         [NSStringFromClass([app class]) UTF8String]);
-
-                // 尝试多种属性获取路径 (太阳神方式)
-                // canonicalExecutablePath — 直接拿到可执行文件路径
-                NSString *execPath = [app valueForKey:@"canonicalExecutablePath"];
-                if (!execPath && [app respondsToSelector:@selector(canonicalExecutablePath)]) {
-                    execPath = [app performSelector:@selector(canonicalExecutablePath)];
-                }
-                SAFE_LOG("  canonicalExecutablePath: %s", execPath ? [execPath UTF8String] : "(nil)");
-                if (execPath && [execPath length] > 0) {
-                    gamePath = [execPath stringByDeletingLastPathComponent];
-                }
-
-                // bundleURL
-                if (!gamePath) {
-                    NSURL *bundleURL = [app valueForKey:@"bundleURL"];
-                    if (!bundleURL && [app respondsToSelector:@selector(bundleURL)]) {
-                        bundleURL = [app performSelector:@selector(bundleURL)];
-                    }
-                    SAFE_LOG("  bundleURL: %s", bundleURL ? [[bundleURL path] UTF8String] : "(nil)");
-                    if (bundleURL) gamePath = [bundleURL path];
-                }
-
-                // bundleContainerURL
-                if (!gamePath) {
-                    NSURL *containerURL = [app valueForKey:@"bundleContainerURL"];
-                    if (!containerURL && [app respondsToSelector:@selector(bundleContainerURL)]) {
-                        containerURL = [app performSelector:@selector(bundleContainerURL)];
-                    }
-                    SAFE_LOG("  bundleContainerURL: %s", containerURL ? [[containerURL path] UTF8String] : "(nil)");
-                    if (containerURL) gamePath = [containerURL path];
-                }
-
-                // containerURL
-                if (!gamePath) {
-                    NSURL *contURL = [app valueForKey:@"containerURL"];
-                    SAFE_LOG("  containerURL: %s", contURL ? [[contURL path] UTF8String] : "(nil)");
-                    if (contURL) gamePath = [contURL path];
-                }
-
-                // bundlePath (字符串)
-                if (!gamePath) {
-                    NSString *bp = [app valueForKey:@"bundlePath"];
-                    SAFE_LOG("  bundlePath: %s", bp ? [bp UTF8String] : "(nil)");
-                    if (bp) gamePath = bp;
-                }
-
-                // 最后尝试 description 提取路径
-                if (!gamePath) {
-                    NSString *desc = [app description];
-                    SAFE_LOG("  proxy description: %s", desc ? [desc UTF8String] : "(nil)");
-                }
-
-                if (gamePath) break;
-            } @catch (NSException *e) {
-                SAFE_LOG("allApplications 遍历异常: %s", [[e description] UTF8String]);
-            }
-        }
-    }
-
-    // 方法2: 尝试已知的固定路径模式
+// 探查游戏包 — 通过 proc_pidpath 获取游戏可执行文件路径后检查 Frameworks
+- (void)inspectGameBundleAtPath:(NSString *)gamePath {
     if (!gamePath) {
-        NSString *bundleRoot = @"/var/containers/Bundle/Application";
-        NSArray *uuids = [fm contentsOfDirectoryAtPath:bundleRoot error:nil];
-        for (NSString *uuid in uuids) {
-            NSString *path = [bundleRoot stringByAppendingPathComponent:uuid];
-            NSArray *apps = [fm contentsOfDirectoryAtPath:path error:nil];
-            for (NSString *app in apps) {
-                if ([app containsString:@"DeltaForce"] || [app containsString:@"dfm"] || [app containsString:@"DFM"]) {
-                    gamePath = [path stringByAppendingPathComponent:app];
-                    SAFE_LOG("通过目录遍历找到: %s", [gamePath UTF8String]);
-                    break;
-                }
-            }
-            if (gamePath) break;
-        }
-    }
-
-    if (!gamePath || ![fm fileExistsAtPath:gamePath]) {
-        SAFE_LOG("未找到 DeltaForceClient.app — LSApplicationWorkspace 和目录遍历均失败");
-        SAFE_LOG("=== 游戏包探查完成 (失败) ===");
+        SAFE_LOG("inspectGameBundleAtPath: gamePath is nil");
         return;
     }
+    NSFileManager *fm = [NSFileManager defaultManager];
 
-    SAFE_LOG("游戏路径: %s", [gamePath UTF8String]);
+    SAFE_LOG("=== 探查游戏包: %s ===", [gamePath UTF8String]);
 
     // 列出 .app 根目录
     NSArray *rootFiles = [fm contentsOfDirectoryAtPath:gamePath error:nil];
@@ -523,11 +401,6 @@ static void install_crash_handlers(void) {
         SAFE_LOG("HUD overlay started");
     }
 
-    // 探查游戏包结构 (寻找可替换的 dylib 目标)
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        [self inspectGameBundle];
-    });
-
     // 后台: 先启动游戏, 再注入
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         // 步骤1: 自动打开三角洲行动 (主线程异步, 避免 openApplication 导致死锁)
@@ -540,9 +413,14 @@ static void install_crash_handlers(void) {
         // 步骤2: 注入游戏（带重试），每次找到游戏进程后重新注册 SBS
         int result = hooks_attach_to_game();
         if (result == 0) {
-            SAFE_LOG("游戏注入成功，正在扫描偏移...");
+            SAFE_LOG("游戏进程已找到，正在扫描偏移...");
             hooks_scan_offsets();
-            // 游戏进程已检测到，重新注册 SBS 托管
+
+            // 通过 PID 获取游戏路径 (proc_pidpath 不需要特殊权限)
+            NSString *gamePath = hooks_get_game_path();
+            SAFE_LOG("proc_pidpath 游戏路径: %s", gamePath ? [gamePath UTF8String] : "(nil)");
+            [self inspectGameBundleAtPath:gamePath];
+
             dispatch_async(dispatch_get_main_queue(), ^{
                 [[HUDController shared] reRegisterSBSHosting];
             });
@@ -558,9 +436,14 @@ static void install_crash_handlers(void) {
                 }
                 result = hooks_attach_to_game();
                 if (result == 0) {
-                    SAFE_LOG("游戏注入成功！");
+                    SAFE_LOG("游戏进程已找到！");
                     hooks_scan_offsets();
-                    // 重新注册 SBS
+
+                    // 通过 PID 获取游戏路径
+                    NSString *gamePath = hooks_get_game_path();
+                    SAFE_LOG("proc_pidpath 游戏路径: %s", gamePath ? [gamePath UTF8String] : "(nil)");
+                    [self inspectGameBundleAtPath:gamePath];
+
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [[HUDController shared] reRegisterSBSHosting];
                     });
