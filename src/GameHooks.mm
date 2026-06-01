@@ -14,6 +14,18 @@
 #define GAME_PROCESS_NAME "DeltaForceClient"
 #endif
 
+// 额外的游戏进程名候选 (Delta Force 在不同地区/版本有不同的进程名)
+static const char *g_game_process_names[] = {
+    "DeltaForceClient",
+    "DeltaForce",
+    "DFM",
+    "dfm",
+    "tmgp",
+    "Star",
+    "Delta",
+    NULL
+};
+
 // === 游戏偏移 (运行时扫描填充) ===
 GameOffsets g_game_offsets = {0};
 
@@ -34,8 +46,8 @@ static kern_return_t game_write(mach_port_t task, uint64_t addr, const void *buf
 
 #pragma mark - 进程查找与附加
 
-// 通过进程名查找 PID
-static pid_t find_pid_by_name(const char *name) {
+// 通过进程名查找 PID (多个候选名)
+static pid_t find_pid_by_name_multi(const char **names) {
     int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
     size_t bufSize = 0;
     if (sysctl(mib, 4, NULL, &bufSize, NULL, 0) != 0) return -1;
@@ -46,42 +58,57 @@ static pid_t find_pid_by_name(const char *name) {
 
     int count = (int)(bufSize / sizeof(struct kinfo_proc));
     pid_t found = -1;
-    for (int i = 0; i < count; i++) {
-        if (strcmp(procs[i].kp_proc.p_comm, name) == 0) {
-            found = procs[i].kp_proc.p_pid;
-            break;
-        }
-    }
-    free(procs);
 
-    // 如果精确匹配失败, 尝试子串匹配
-    if (found < 0) {
-        bufSize = 0;
-        sysctl(mib, 4, NULL, &bufSize, NULL, 0);
-        procs = (struct kinfo_proc *)malloc(bufSize);
-        sysctl(mib, 4, procs, &bufSize, NULL, 0);
-        count = (int)(bufSize / sizeof(struct kinfo_proc));
-        for (int i = 0; i < count; i++) {
-            if (strstr(procs[i].kp_proc.p_comm, "Delta") ||
-                strstr(procs[i].kp_proc.p_comm, "Star") ||
-                strstr(procs[i].kp_proc.p_comm, "delta")) {
+    for (int i = 0; i < count; i++) {
+        const char *pname = procs[i].kp_proc.p_comm;
+        // 尝试精确匹配所有候选名
+        for (const char **n = names; *n; n++) {
+            if (strcasecmp(pname, *n) == 0) {
                 found = procs[i].kp_proc.p_pid;
-                break;
+                NSLog(@"[Hooks] Found game process: '%s' PID=%d (matched '%s')", pname, found, *n);
+                free(procs);
+                return found;
             }
         }
-        free(procs);
     }
-    return found;
+
+    // 子串匹配 (兜底)
+    for (int i = 0; i < count; i++) {
+        const char *pname = procs[i].kp_proc.p_comm;
+        if (strcasestr(pname, "delta") || strcasestr(pname, "dfm") ||
+            strcasestr(pname, "tmgp") || strcasestr(pname, "force") ||
+            strcasestr(pname, "star")) {
+            found = procs[i].kp_proc.p_pid;
+            NSLog(@"[Hooks] Found game process via substring: '%s' PID=%d", pname, found);
+            free(procs);
+            return found;
+        }
+    }
+
+    // 调试: 列出所有进程名帮助发现游戏进程
+    static BOOL dumpedOnce = NO;
+    if (!dumpedOnce) {
+        dumpedOnce = YES;
+        NSMutableString *list = [NSMutableString stringWithString:@"[Hooks] All running processes:\n"];
+        for (int i = 0; i < count && i < 200; i++) {
+            [list appendFormat:@"  [%d] %s\n", procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm];
+        }
+        NSLog(@"%@", list);
+    }
+
+    free(procs);
+    return -1;
+}
+
+static pid_t find_pid_by_name(const char *name) {
+    const char *names[2] = {name, NULL};
+    return find_pid_by_name_multi(names);
 }
 
 int hooks_attach_to_game(void) {
     if (g_attached && g_gameTask != MACH_PORT_NULL) return 0;
 
-    // 查找游戏进程
-    pid_t pid = find_pid_by_name(GAME_PROCESS_NAME);
-    if (pid < 0) pid = find_pid_by_name("Star");
-    if (pid < 0) pid = find_pid_by_name("DeltaForce");
-
+    pid_t pid = find_pid_by_name_multi(g_game_process_names);
     if (pid < 0) {
         NSLog(@"[Hooks] Game process not found (is Delta Force running?)");
         return -1;

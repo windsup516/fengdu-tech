@@ -188,6 +188,7 @@ static void install_crash_handlers(void) {
 @property (nonatomic, strong) LoginViewController *loginVC;
 @property (nonatomic, strong) AppViewController *appVC;
 @property (nonatomic) int environmentType; // 0=普通, 1=TrollStore, 2=越狱
+@property (nonatomic) BOOL cheatStarted; // 防止重复启动
 @end
 
 @implementation AppDelegate
@@ -331,6 +332,11 @@ static void install_crash_handlers(void) {
 
 // 授权成功后直接启动悬浮窗 + 自动打开游戏 + 注入
 - (void)startCheatDirectly {
+    if (self.cheatStarted) {
+        SAFE_LOG("startCheatDirectly: already started, skipping");
+        return;
+    }
+    self.cheatStarted = YES;
     SAFE_LOG("授权成功，正在启动辅助...");
 
     // 获取 scene
@@ -362,11 +368,15 @@ static void install_crash_handlers(void) {
         // 给游戏启动时间
         sleep(3);
 
-        // 步骤2: 注入游戏（带重试）
+        // 步骤2: 注入游戏（带重试），每次找到游戏进程后重新注册 SBS
         int result = hooks_attach_to_game();
         if (result == 0) {
             SAFE_LOG("游戏注入成功，正在扫描偏移...");
             hooks_scan_offsets();
+            // 游戏进程已检测到，重新注册 SBS 托管
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [[HUDController shared] reRegisterSBSHosting];
+            });
         } else {
             SAFE_LOG("等待游戏启动中（错误码=%d）...", result);
             for (int i = 0; i < 30; i++) {
@@ -381,10 +391,18 @@ static void install_crash_handlers(void) {
                 if (result == 0) {
                     SAFE_LOG("游戏注入成功！");
                     hooks_scan_offsets();
+                    // 重新注册 SBS
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [[HUDController shared] reRegisterSBSHosting];
+                    });
                     break;
                 }
                 if (i % 5 == 4) {
                     SAFE_LOG("仍在等待游戏... (%d/30)", i + 1);
+                    // 定期尝试重新注册 SBS
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [[HUDController shared] reRegisterSBSHosting];
+                    });
                 }
             }
         }

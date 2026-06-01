@@ -22,6 +22,7 @@
 - (void)registerHIDEventCallback;
 - (void)syncTouchWindowToPanel;
 - (void)setupHostingController;
+- (void)reRegisterSBSHosting;
 
 @end
 #endif

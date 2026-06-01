@@ -251,6 +251,25 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
     });
 }
 
+- (void)reRegisterSBSHosting {
+    // 在游戏启动后重新注册 SBS 托管
+    // SBS 注册可能在 app 切后台时被清除，需要在游戏活跃时重新注册
+    if (!self.hostingController) {
+        hud_log(@"reRegisterSBS: no hosting controller, re-initializing...");
+        [self setupHostingController];
+        return;
+    }
+
+    hud_log(@"reRegisterSBS: re-registering both windows...");
+    if (self.hudWindow) {
+        attachWindowToHostingController(self.hudWindow, self.hostingController);
+    }
+    if (self.touchWindow) {
+        attachWindowToHostingController(self.touchWindow, self.hostingController);
+    }
+    hud_log(@"reRegisterSBS: done");
+}
+
 - (void)show {
     void (^showBlock)(void) = ^{
         self.hudWindow.hidden = NO;
