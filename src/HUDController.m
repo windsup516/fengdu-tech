@@ -135,12 +135,7 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
             NSLog(@"[HUD] Hosting controller setup failed: %@", e);
         }
 
-        // 步骤6: 初始隐藏
-        self.hudWindow.hidden = YES;
-        self.touchWindow.hidden = YES;
-        self.showing = NO;
-
-        // 步骤7: 同步方向
+        // 步骤6: 同步方向
         [self.rootVC syncCurrentOrientation];
 
         // 步骤8: HID 回调 (可能失败，非致命)
@@ -158,17 +153,9 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
 }
 
 - (void)setupHostingController {
-    static NSString *className = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        className = DecryptSBSClassName(
-            encryptedClassNamePart1, xorKeyClassNamePart1,
-            encryptedClassNamePart2, xorKeyClassNamePart2,
-            encryptedClassNamePart3, xorKeyClassNamePart3
-        );
-    });
+    // 直接使用 SBS 类名 — 原版的 XOR 解密数据提取错误，全部解密为 0x60
+    Class hostingClass = NSClassFromString(@"SBSAccessibilityWindowHostingController");
 
-    Class hostingClass = NSClassFromString(className);
     if (hostingClass) {
         self.hostingController = [[hostingClass alloc] init];
 
@@ -179,9 +166,9 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
             attachWindowToHostingController(self.touchWindow, self.hostingController);
         }
 
-        NSLog(@"[HUD] Hosting controller setup: %@", className);
+        NSLog(@"[HUD] SBS hosting OK: %@", NSStringFromClass(hostingClass));
     } else {
-        NSLog(@"[HUD] Hosting class not available (iOS < 14?)");
+        NSLog(@"[HUD] SBS hosting UNAVAILABLE on this iOS");
     }
 }
 
@@ -193,13 +180,19 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
 }
 
 - (void)show {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    void (^showBlock)(void) = ^{
         self.hudWindow.hidden = NO;
         self.touchWindow.hidden = NO;
         self.showing = YES;
-
         [self.rootVC prepareForEntryAnimation];
-    });
+        NSLog(@"[HUD] Windows now visible");
+    };
+
+    if ([NSThread isMainThread]) {
+        showBlock();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), showBlock);
+    }
 
     // 游戏注入由 startCheatDirectly 统一管理（带重试循环）
     NSLog(@"[HUD] Shown");
