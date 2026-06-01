@@ -46,6 +46,10 @@
 }
 
 - (void)loadFonts {
+    if (!ImGui::GetCurrentContext()) {
+        NSLog(@"[ImGui] FATAL: No ImGui context, cannot load fonts");
+        return;
+    }
     ImGuiIO &io = ImGui::GetIO();
     io.Fonts->AddFontDefault();
 }

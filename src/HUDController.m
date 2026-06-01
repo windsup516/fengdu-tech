@@ -93,6 +93,13 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
     if (self.windowsCreated) return;
     self.windowsCreated = YES;
 
+    // 确保在主线程 + 窗口 scene 已就绪
+    if (!scene) {
+        NSLog(@"[HUD] createWindowsOnScene: scene is nil, aborting");
+        self.windowsCreated = NO;
+        return;
+    }
+
     @try {
         // 步骤1: 创建 HUD 视图控制器
         self.rootVC = [[HUDRootViewController alloc] init];
@@ -194,17 +201,7 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         [self.rootVC prepareForEntryAnimation];
     });
 
-    // 后台附加游戏进程
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        int result = hooks_attach_to_game();
-        if (result == 0) {
-            NSLog(@"[HUD] Game attached, scanning offsets...");
-            hooks_scan_offsets();
-        } else {
-            NSLog(@"[HUD] Game attach failed (err=%d), overlay only mode", result);
-        }
-    });
-
+    // 游戏注入由 startCheatDirectly 统一管理（带重试循环）
     NSLog(@"[HUD] Shown");
 }
 
@@ -232,29 +229,33 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
 void attachWindowToHostingController(UIWindow *window, id hostingController) {
     if (!window || !hostingController) return;
 
-    SEL registerSel = NSSelectorFromString(@"registerWindow:contextID:windowLevel:");
-    if (![hostingController respondsToSelector:registerSel]) {
-        NSLog(@"[HUD] Hosting controller does not respond to registerWindow:contextID:windowLevel:");
-        return;
+    @try {
+        SEL registerSel = NSSelectorFromString(@"registerWindow:contextID:windowLevel:");
+        if (![hostingController respondsToSelector:registerSel]) {
+            NSLog(@"[HUD] Hosting controller does not respond to registerWindow:contextID:windowLevel:");
+            return;
+        }
+
+        // 获取窗口的 _contextId (UIScene 上下文 ID)
+        unsigned int contextId = 0;
+        if ([window respondsToSelector:@selector(_contextId)]) {
+            contextId = (unsigned int)[window _contextId];
+        }
+
+        double winLevel = window.windowLevel;
+
+        NSMethodSignature *sig = [NSMethodSignature signatureWithObjCTypes:"v32@0:8@16Q24d28"];
+
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        [inv setTarget:hostingController];
+        [inv setSelector:registerSel];
+        [inv setArgument:&window atIndex:2];
+        [inv setArgument:&contextId atIndex:3];
+        [inv setArgument:&winLevel atIndex:4];
+        [inv invoke];
+
+        NSLog(@"[HUD] Window registered via NSInvocation: ctx=%u level=%.0f", contextId, winLevel);
+    } @catch (NSException *e) {
+        NSLog(@"[HUD] attachWindowToHostingController failed: %@", e);
     }
-
-    // 获取窗口的 _contextId (UIScene 上下文 ID)
-    unsigned int contextId = 0;
-    if ([window respondsToSelector:@selector(_contextId)]) {
-        contextId = (unsigned int)[window _contextId];
-    }
-
-    double winLevel = window.windowLevel;
-
-    NSMethodSignature *sig = [NSMethodSignature signatureWithObjCTypes:"v32@0:8@16Q24d28"];
-
-    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-    [inv setTarget:hostingController];
-    [inv setSelector:registerSel];
-    [inv setArgument:&window atIndex:2];
-    [inv setArgument:&contextId atIndex:3];
-    [inv setArgument:&winLevel atIndex:4];
-    [inv invoke];
-
-    NSLog(@"[HUD] Window registered via NSInvocation: ctx=%u level=%.0f", contextId, winLevel);
 }

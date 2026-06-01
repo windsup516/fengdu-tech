@@ -25,6 +25,9 @@ float g_screenHeight = 0.0f;
 
 static id<MTLCommandQueue> gCmdQueue = nil;
 
+// 防止 viewDidLoad 被多次调用（内存警告可能导致 view 被卸载重载）
+static BOOL g_imGuiInitialized = NO;
+
 @interface HUDRootViewController ()
 @property (nonatomic, strong) CADisplayLink *displayLink;
 @property (nonatomic, strong) MetalRenderer *renderer;
@@ -48,16 +51,21 @@ static id<MTLCommandQueue> gCmdQueue = nil;
     g_screenWidth = (float)bounds.size.width;
     g_screenHeight = (float)bounds.size.height;
 
+    // ===== 步骤0: 创建 ImGui 上下文 (必须在任何 ImGui 调用之前, 且只创建一次) =====
+    if (!g_imGuiInitialized) {
+        if (!ImGui::GetCurrentContext()) {
+            ImGui::CreateContext();
+            ImGui::GetIO().IniFilename = NULL; // 禁用 ini 文件, 避免文件系统检测
+            NSLog(@"[HUD] ImGui context created");
+        }
+    }
+
     // ===== 创建 UITextField 作为 CAMetalLayer 容器 (反检测关键) =====
-    // 原版使用 UITextField 而非 UIView — UITextField 是常见 UIKit 组件
-    // 反作弊扫描器不会怀疑一个 UITextField
     gMetalContainer = [[UITextField alloc] initWithFrame:bounds];
     gMetalContainer.backgroundColor = [UIColor clearColor];
-    gMetalContainer.secureTextEntry = YES;  // 防截图
+    gMetalContainer.secureTextEntry = YES;
     gMetalContainer.userInteractionEnabled = NO;
 
-    // 获取 UIFieldEditor (UITextField 的第一个子视图)
-    // CAMetalLayer 添加到 UIFieldEditor 的 layer 上
     UIView *fieldEditor = gMetalContainer.subviews.firstObject;
     if (fieldEditor) {
         fieldEditor.userInteractionEnabled = NO;
@@ -66,67 +74,72 @@ static id<MTLCommandQueue> gCmdQueue = nil;
     // ===== 创建 CAMetalLayer =====
     gMetalLayer = [CAMetalLayer layer];
     gMetalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    gMetalLayer.framebufferOnly = YES;   // 原版: framebufferOnly = YES (更接近正常渲染)
+    gMetalLayer.framebufferOnly = YES;
     gMetalLayer.opaque = NO;
-    gMetalLayer.maximumDrawableCount = 2; // 原版: 2 (不是3)
+    gMetalLayer.maximumDrawableCount = 2;
     gMetalLayer.presentsWithTransaction = NO;
     gMetalLayer.frame = bounds;
 
-    // ===== 将 CAMetalLayer 添加到 UIFieldEditor 的 layer (原版方式) =====
     if (fieldEditor) {
         [fieldEditor.layer addSublayer:gMetalLayer];
     } else {
-        // fallback: 直接加到 gMetalContainer.layer
         [gMetalContainer.layer addSublayer:gMetalLayer];
     }
 
-    // ===== 创建 Metal 设备 =====
-    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-    if (!device) {
-        NSLog(@"[HUD] FATAL: Metal not available");
-        return;
+    // ===== 创建 Metal 设备 (仅首次) =====
+    if (!g_imGuiInitialized) {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (!device) {
+            NSLog(@"[HUD] FATAL: Metal not available");
+            return;
+        }
+        gMetalLayer.device = device;
+        gMetalLayer.drawableSize = CGSizeMake(bounds.size.width * scale,
+                                               bounds.size.height * scale);
+
+        // ===== 创建命令队列 =====
+        gCmdQueue = [device newCommandQueue];
+
+        // ===== 初始化 Metal 渲染器 =====
+        self.renderer = [[MetalRenderer alloc] initWithDevice:device
+                                                        layer:gMetalLayer
+                                                 commandQueue:gCmdQueue];
+
+        // ===== 初始化 ImGui 配置 (context 已创建, GetIO 安全) =====
+        self.imgui = [[ImGuiAdapter alloc] init];
+        [self.imgui loadFonts];
+        [self.imgui setupStyle];
+
+        // ===== 初始化 ImGui Metal 后端 + 显式创建字体纹理 =====
+        ImGui_ImplMetal_Init(device);
+        ImGui_ImplMetal_CreateDeviceObjects(device);
+        NSLog(@"[HUD] ImGui Metal backend initialized");
     }
-    gMetalLayer.device = device;
-    gMetalLayer.drawableSize = CGSizeMake(bounds.size.width * scale,
-                                           bounds.size.height * scale);
-
-    // ===== 创建命令队列 =====
-    gCmdQueue = [device newCommandQueue];
-
-    // ===== 初始化 Metal 渲染器 =====
-    self.renderer = [[MetalRenderer alloc] initWithDevice:device
-                                                    layer:gMetalLayer
-                                             commandQueue:gCmdQueue];
-
-    // ===== 初始化 ImGui =====
-    self.imgui = [[ImGuiAdapter alloc] init];
-    [self.imgui loadFonts];
-    [self.imgui setupStyle];
-
-    // ===== 初始化 ImGui Metal 后端 =====
-    ImGui_ImplMetal_Init(device);
 
     // ===== 启动 DisplayLink 60fps 渲染循环 =====
-    // 选择器名 "ChangeUI" 对应原版反编译中的混淆方法名
-    self.displayLink = [CADisplayLink displayLinkWithTarget:self
-                                                   selector:@selector(ChangeUI)];
+    if (!self.displayLink) {
+        self.displayLink = [CADisplayLink displayLinkWithTarget:self
+                                                       selector:@selector(ChangeUI)];
 
-    if (@available(iOS 15.0, *)) {
-        self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 60, 60);
-    } else {
-        self.displayLink.preferredFramesPerSecond = 60;
+        if (@available(iOS 15.0, *)) {
+            self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 60, 60);
+        } else {
+            self.displayLink.preferredFramesPerSecond = 60;
+        }
+
+        [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop]
+                               forMode:NSRunLoopCommonModes];
     }
 
-    [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop]
-                           forMode:NSRunLoopCommonModes];
-
     self.rendering = YES;
+    g_imGuiInitialized = YES;
     NSLog(@"[HUD] Metal+ImGui ready (UITextField container, anti-detection)");
 }
 
 - (void)ChangeUI {
     if (!self.rendering) return;
     if (!gMetalLayer || !gCmdQueue) return;
+    if (!ImGui::GetCurrentContext()) return;
 
     self.animationTime = CACurrentMediaTime();
 
