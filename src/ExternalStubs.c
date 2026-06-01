@@ -31,30 +31,24 @@ static int detect_environment(void) {
         return g_env_type;
     }
 
-    // 检测 TrollStore (CoreTrust bug)
-    if (access("/var/mobile/Library/Caches/com.apple.mobile.installation.plist", F_OK) != 0) {
-        // 检查是否有 /var/containers/Bundle/tmp/.trollstore 标记
-        FILE *f = fopen("/tmp/.trollstore", "r");
-        if (f) { fclose(f); g_env_type = 1; return g_env_type; }
-    }
-
-    // 检查是否通过 TrollStore 安装 (包路径特征)
+    // 检测 TrollStore — 通过包路径特征判断
+    // TrollStore 安装的 App 总是在 /var/containers/Bundle/Application/<UUID>/
     char path[1024];
-    uint32_t size = sizeof(path);
-    if (_NSGetExecutablePath(path, &size) == 0) {
+    uint32_t size_path = sizeof(path);
+    if (_NSGetExecutablePath(path, &size_path) == 0) {
         if (strstr(path, "/var/containers/Bundle/Application/") ||
             strstr(path, "/private/var/containers/Bundle/Application/")) {
-            // 检查是否有 task_for_pid 权限
-            mach_port_t test = MACH_PORT_NULL;
-            kern_return_t kr = task_for_pid(mach_task_self(), getpid(), &test);
-            if (kr == KERN_SUCCESS) {
-                mach_port_deallocate(mach_task_self(), test);
-                g_env_type = 1; // TrollStore with tfp0
-            } else {
-                g_env_type = 0;
-            }
+            g_env_type = 1; // TrollStore — 路径匹配就确定
             return g_env_type;
         }
+    }
+
+    // 检查 /tmp/.trollstore 标记文件
+    FILE *f = fopen("/tmp/.trollstore", "r");
+    if (f) {
+        fclose(f);
+        g_env_type = 1;
+        return g_env_type;
     }
 
     g_env_type = 0;

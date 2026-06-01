@@ -9,18 +9,81 @@
 #import <stdarg.h>
 #import <signal.h>
 #import <execinfo.h>
+#import <dlfcn.h>
+#import <mach-o/dyld.h>
 #import "LoginViewController.h"
 #import "AppViewController.h"
 #import "HUDController.h"
 #import "XPFKernelInterface.h"
 
-// 外部函数声明 (来自 ExternalStubs.c)
+// 外部函数声明 (来自 ExternalStubs.c 的 WEAK 存根)
 extern int jb_init(void);
 extern int is_trollstore(void);
 extern int is_jailbroken(void);
 extern uint64_t physread64(uint64_t phys_addr);
 extern int physwritebuf(uint64_t phys_addr, void *buffer, size_t size);
 extern uint64_t phystokv(uint64_t phys_addr);
+
+// ====== dylib 函数指针 — 运行时从 libjailbreak.dylib 解析真实实现 ======
+// WEAK 存根在 ExternalStubs.c 中，dyld 会优先用它们。
+// 我们必须通过 dlopen/dlsym 显式获取 dylib 的真实函数指针。
+static int (*real_jb_init)(void) = NULL;
+static uint64_t (*real_physread64)(uint64_t) = NULL;
+static int (*real_physwritebuf)(uint64_t, void*, size_t) = NULL;
+static uint64_t (*real_phystokv)(uint64_t) = NULL;
+static int (*real_xpf_inject_dylib)(int, const char*) = NULL;
+
+static void resolve_dylib_functions(void) {
+    // 从可执行文件路径推算 Frameworks 目录
+    char exePath[1024];
+    uint32_t sz = (uint32_t)sizeof(exePath);
+    if (_NSGetExecutablePath(exePath, &sz) != 0) return;
+
+    // 构建 libjailbreak.dylib 的绝对路径
+    NSString *exeStr = [NSString stringWithUTF8String:exePath];
+    NSString *fwPath = [[[exeStr stringByDeletingLastPathComponent]
+                         stringByAppendingPathComponent:@"Frameworks"]
+                        stringByAppendingPathComponent:@"libjailbreak.dylib"];
+
+    void *jbHandle = dlopen([fwPath UTF8String], RTLD_NOLOAD | RTLD_LAZY);
+    if (!jbHandle) {
+        // 尝试用 @rpath
+        jbHandle = dlopen("@rpath/libjailbreak.dylib", RTLD_NOLOAD | RTLD_LAZY);
+    }
+
+    if (jbHandle) {
+        real_jb_init = dlsym(jbHandle, "jb_init");
+        real_physread64 = dlsym(jbHandle, "physread64");
+        real_physwritebuf = dlsym(jbHandle, "physwritebuf");
+        real_phystokv = dlsym(jbHandle, "phystokv");
+        real_xpf_inject_dylib = dlsym(jbHandle, "xpf_inject_dylib");
+        fprintf(stderr, "[main] Resolved dylib funcs: jb_init=%p physread64=%p\n",
+                (void*)real_jb_init, (void*)real_physread64);
+    } else {
+        fprintf(stderr, "[main] libjailbreak.dylib not loaded (err=%s)\n", dlerror());
+    }
+}
+
+// 包装函数 — 优先用 dylib 版本，fallback 到 WEAK 存根
+static int call_jb_init(void) {
+    if (real_jb_init) return real_jb_init();
+    return jb_init(); // WEAK stub
+}
+
+static uint64_t call_physread64(uint64_t addr) {
+    if (real_physread64) return real_physread64(addr);
+    return physread64(addr);
+}
+
+static int call_physwritebuf(uint64_t addr, void *buf, size_t sz) {
+    if (real_physwritebuf) return real_physwritebuf(addr, buf, sz);
+    return physwritebuf(addr, buf, sz);
+}
+
+static uint64_t call_phystokv(uint64_t addr) {
+    if (real_phystokv) return real_phystokv(addr);
+    return phystokv(addr);
+}
 
 // ====== 文件日志系统 ======
 // 将日志写入 Documents/debug.log，崩溃后可在 Files.app 中查看
@@ -129,6 +192,9 @@ static void install_crash_handlers(void) {
     // 最先安装崩溃处理器
     install_crash_handlers();
 
+    // 解析 dylib 真实函数 (必须在 jb_init 之前)
+    resolve_dylib_functions();
+
     SAFE_LOG("=== DeltaForce TrollKit v2.1 Starting ===");
 
     // ===== 步骤1: 环境检测 (非致命) =====
@@ -152,8 +218,8 @@ static void install_crash_handlers(void) {
         SAFE_LOG("XPF kernel init: OK");
     }
 
-    // ===== 步骤3: 越狱原语初始化 (允许失败) =====
-    int jbResult = jb_init();
+    // ===== 步骤3: 越狱原语初始化 (优先用 dylib 版本) =====
+    int jbResult = call_jb_init();
     if (jbResult != 0) {
         SAFE_LOG("jb_init: FAILED (continuing with userspace only)");
     }
