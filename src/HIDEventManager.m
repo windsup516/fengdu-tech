@@ -9,9 +9,20 @@
 #import "HIDEventManager.h"
 #import <IOKit/hid/IOHIDEventSystemClient.h>
 #import <IOKit/hid/IOHIDEvent.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <mach/mach_time.h>
 #import <dlfcn.h>
 #import <objc/runtime.h>
+
+// UIGestureRepresentation 私有类接口声明
+@interface NSObject (HIDEventRepresentation)
+- (id)representationWithHIDEvent:(IOHIDEventRef)event hidStreamIdentifier:(uint64_t)identifier;
+- (CGPoint)location;
+- (BOOL)isLift;
+- (BOOL)isInRange;
+- (BOOL)isInRangeLift;
+- (BOOL)isCancel;
+@end
 
 // === 全局触摸状态 (对应原版反编译全局变量) ===
 // byte_10139CB60 — 触摸激活标志 (0=触摸中, 1=未触摸)
