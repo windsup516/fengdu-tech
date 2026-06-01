@@ -435,15 +435,9 @@ static void install_crash_handlers(void) {
                 [[HUDController shared] reRegisterSBSHosting];
             });
         } else {
-            SAFE_LOG("等待游戏启动中（错误码=%d）...", result);
+            SAFE_LOG("等待游戏进程出现...");
             for (int i = 0; i < 30; i++) {
                 sleep(2);
-                // 前几次没找到就再尝试启动
-                if (i == 3 || i == 8 || i == 15) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        [self launchDeltaForceGame];
-                    });
-                }
                 result = hooks_attach_to_game();
                 if (result == 0) {
                     SAFE_LOG("游戏进程已找到！");

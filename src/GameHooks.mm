@@ -81,7 +81,36 @@ static void hooks_log(NSString *fmt, ...) {
 static pid_t find_pid_by_name_multi(const char **names) {
     int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
     size_t bufSize = 0;
-    if (sysctl(mib, 4, NULL, &bufSize, NULL, 0) != 0) return -1;
+
+    // 首次调用时无条件 dump 进程列表
+    static BOOL dumpedOnce = NO;
+    if (!dumpedOnce) {
+        dumpedOnce = YES;
+        if (sysctl(mib, 4, NULL, &bufSize, NULL, 0) != 0) {
+            hooks_log(@"sysctl(KERN_PROC_ALL) size query failed: %d (%s)", errno, strerror(errno));
+            return -1;
+        }
+        struct kinfo_proc *procs = (struct kinfo_proc *)malloc(bufSize);
+        if (!procs) return -1;
+        if (sysctl(mib, 4, procs, &bufSize, NULL, 0) != 0) {
+            hooks_log(@"sysctl(KERN_PROC_ALL) data query failed: %d (%s)", errno, strerror(errno));
+            free(procs);
+            return -1;
+        }
+        int count = (int)(bufSize / sizeof(struct kinfo_proc));
+        hooks_log(@"=== All running processes (first 200 of %d) ===", count);
+        for (int i = 0; i < count && i < 200; i++) {
+            hooks_log(@"  [%d] %s", procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm);
+        }
+        hooks_log(@"=== End process list ===");
+        free(procs);
+    }
+
+    // 正常搜索
+    if (sysctl(mib, 4, NULL, &bufSize, NULL, 0) != 0) {
+        hooks_log(@"sysctl(KERN_PROC_ALL) failed in search: %d (%s)", errno, strerror(errno));
+        return -1;
+    }
 
     struct kinfo_proc *procs = (struct kinfo_proc *)malloc(bufSize);
     if (!procs) return -1;
@@ -114,17 +143,6 @@ static pid_t find_pid_by_name_multi(const char **names) {
             free(procs);
             return found;
         }
-    }
-
-    // 调试: 列出所有进程名帮助发现游戏进程
-    static BOOL dumpedOnce = NO;
-    if (!dumpedOnce) {
-        dumpedOnce = YES;
-        hooks_log(@"=== All running processes (first 200) ===");
-        for (int i = 0; i < count && i < 200; i++) {
-            hooks_log(@"  [%d] %s", procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm);
-        }
-        hooks_log(@"=== End process list ===");
     }
 
     free(procs);

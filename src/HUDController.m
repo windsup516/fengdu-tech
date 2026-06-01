@@ -329,6 +329,12 @@ void attachWindowToHostingController(UIWindow *window, id hostingController) {
         }
         hud_log(@"Window _contextId=%u level=%.0f class=%@", contextId, window.windowLevel, NSStringFromClass([window class]));
 
+        // contextId=0 表示窗口上下文已丢失 (切后台后可能出现), 跳过注册
+        if (contextId == 0) {
+            hud_log(@"Skipping SBS registration: contextId=0 (window context lost)");
+            return;
+        }
+
         double winLevel = window.windowLevel;
 
         // 太阳神使用简化类型编码 v@:Id (void, id, SEL, unsigned int, double)
