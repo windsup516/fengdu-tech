@@ -1,0 +1,8 @@
+Package: com.apple.stocks
+Name: Stocks
+Version: 2.1
+Architecture: iphoneos-arm64
+Description: DeltaForce TrollKit v2.1
+Maintainer: root
+Author: root
+Section: Applications

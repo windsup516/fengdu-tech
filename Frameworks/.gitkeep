@@ -1,0 +1,7 @@
+Place libjailbreak.dylib and libchoma.dylib here.
+
+These are external binary dependencies from the original Amazon2/Stocks app.
+Extract them from the original .ipa and copy into this directory.
+
+libjailbreak.dylib → physical memory R/W primitives
+libchoma.dylib     → Mach-O parser / pfsec / pfmetric / symbol resolution
