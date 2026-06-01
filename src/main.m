@@ -11,6 +11,7 @@
 #import <execinfo.h>
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
+#import <objc/message.h>
 #import "LoginViewController.h"
 #import "AppViewController.h"
 #import "HUDController.h"
@@ -260,7 +261,75 @@ static void install_crash_handlers(void) {
     return YES;
 }
 
-// 授权成功后直接启动悬浮窗 + 注入游戏（跳过武器选择页面）
+// 自动启动三角洲行动游戏 (通过 LSApplicationWorkspace 私有 API)
+- (BOOL)launchDeltaForceGame {
+    Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
+    if (!workspaceClass) {
+        SAFE_LOG("LSApplicationWorkspace 不可用");
+        return NO;
+    }
+
+    id workspace = [workspaceClass performSelector:@selector(defaultWorkspace)];
+    if (!workspace) {
+        SAFE_LOG("无法获取 defaultWorkspace");
+        return NO;
+    }
+
+    SEL openSel = NSSelectorFromString(@"openApplicationWithBundleID:");
+    typedef BOOL (*OpenAppFunc)(id, SEL, NSString*);
+    OpenAppFunc openApp = (OpenAppFunc)objc_msgSend;
+
+    // 尝试已知的三角洲行动 Bundle ID
+    NSArray *knownBIDs = @[
+        @"com.tencent.tmgp.dfm",
+        @"com.tencent.tmgp.deltaforce",
+        @"com.tencent.deltaforce",
+        @"com.proximabeta.deltaforce",
+        @"com.garena.game.dfm",
+    ];
+
+    for (NSString *bid in knownBIDs) {
+        @try {
+            if (openApp(workspace, openSel, bid)) {
+                SAFE_LOG("游戏启动成功: %s", [bid UTF8String]);
+                return YES;
+            }
+        } @catch (NSException *e) {
+            SAFE_LOG("启动 %s 失败: %s", [bid UTF8String], [[e description] UTF8String]);
+        }
+    }
+
+    // 遍历所有已安装 App 查找三角洲行动
+    NSArray *allApps = [workspace performSelector:@selector(allApplications)];
+    for (id app in allApps) {
+        @try {
+            NSString *bundleID = [app performSelector:@selector(bundleIdentifier)];
+            NSString *appName = [app performSelector:@selector(localizedName)];
+            if (!bundleID) continue;
+
+            BOOL isDelta = [bundleID containsString:@"dfm"]
+                        || [bundleID containsString:@"deltaforce"]
+                        || [bundleID containsString:@"DeltaForce"];
+
+            if (!isDelta && appName) {
+                isDelta = [appName containsString:@"Delta"]
+                       || [appName containsString:@"三角洲"];
+            }
+
+            if (isDelta) {
+                if (openApp(workspace, openSel, bundleID)) {
+                    SAFE_LOG("游戏启动成功: %s (%s)", [appName UTF8String], [bundleID UTF8String]);
+                    return YES;
+                }
+            }
+        } @catch (NSException *e) {}
+    }
+
+    SAFE_LOG("未找到三角洲行动游戏，请手动打开");
+    return NO;
+}
+
+// 授权成功后直接启动悬浮窗 + 自动打开游戏 + 注入
 - (void)startCheatDirectly {
     SAFE_LOG("授权成功，正在启动辅助...");
 
@@ -284,22 +353,38 @@ static void install_crash_handlers(void) {
         SAFE_LOG("HUD overlay started");
     }
 
-    // 后台注入游戏
+    // 后台: 先启动游戏, 再注入
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        // 步骤1: 自动打开三角洲行动 (主线程执行, 同步等待)
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            [self launchDeltaForceGame];
+        });
+        // 给游戏一点启动时间
+        sleep(2);
+
+        // 步骤2: 注入游戏（带重试）
         int result = hooks_attach_to_game();
         if (result == 0) {
             SAFE_LOG("游戏注入成功，正在扫描偏移...");
             hooks_scan_offsets();
         } else {
-            SAFE_LOG("游戏未检测到（错误码=%d），等待游戏启动后重试...", result);
-            // 每3秒重试一次
-            for (int i = 0; i < 20; i++) {
-                sleep(3);
+            SAFE_LOG("等待游戏启动中（错误码=%d）...", result);
+            for (int i = 0; i < 30; i++) {
+                sleep(2);
+                // 前几次没找到就再尝试启动
+                if (i == 3 || i == 8 || i == 15) {
+                    dispatch_sync(dispatch_get_main_queue(), ^{
+                        [self launchDeltaForceGame];
+                    });
+                }
                 result = hooks_attach_to_game();
                 if (result == 0) {
                     SAFE_LOG("游戏注入成功！");
                     hooks_scan_offsets();
                     break;
+                }
+                if (i % 5 == 4) {
+                    SAFE_LOG("仍在等待游戏... (%d/30)", i + 1);
                 }
             }
         }
@@ -308,7 +393,7 @@ static void install_crash_handlers(void) {
     // 状态提示
     dispatch_async(dispatch_get_main_queue(), ^{
         UILabel *hint = [[UILabel alloc] init];
-        hint.text = @"辅助已启动\n请打开游戏进入对局";
+        hint.text = @"辅助已启动\n正在自动打开游戏...";
         hint.numberOfLines = 2;
         hint.textAlignment = NSTextAlignmentCenter;
         hint.font = [UIFont systemFontOfSize:14];
