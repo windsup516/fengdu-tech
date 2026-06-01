@@ -75,7 +75,6 @@ typedef struct {
 
         self.inFlight = YES;
 
-        // 直接授权 — 跳过防封网关检测
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.inFlight = NO;
@@ -85,7 +84,7 @@ typedef struct {
         });
 
     } else {
-        NSString *errorText = @"请输入授权密钥";
+        NSString *errorText = @"请输入授权码";
         UIColor *redColor = [UIColor colorWithRed:0.973 green:0.443 blue:0.443 alpha:1.0];
         [self setStatusText:errorText color:redColor];
     }
@@ -135,25 +134,21 @@ typedef struct {
 // 测试模式：直接授权，跳过服务器
 - (void)bypassAuthorize {
     NSLog(@"[Login] bypassAuthorize: START");
-    NSString *successText = @"授权成功 (离线)";
+    NSString *successText = @"授权成功，正在初始化...";
     UIColor *tealColor = [UIColor colorWithRed:0.204 green:0.827 blue:0.600 alpha:1.0];
     [self setStatusText:successText color:tealColor];
 
     @try {
         [self saveAuthorizedKey:self.keyField.text];
-        NSLog(@"[Login] Keychain save OK");
     } @catch (NSException *e) {
         NSLog(@"[Login] Keychain save FAILED: %@", e);
     }
 
     __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.6 * NSEC_PER_SEC),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.3 * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
-        NSLog(@"[Login] onAuthorized callback firing...");
         if (weakSelf.onAuthorized) {
             weakSelf.onAuthorized();
-        } else {
-            NSLog(@"[Login] onAuthorized is NIL — cannot proceed!");
         }
     });
 }
@@ -302,21 +297,20 @@ typedef struct {
 }
 
 - (void)installHero {
-    // Logo + Title (简化)
     UILabel *title = [[UILabel alloc] init];
-    title.text = @"DeltaForce";
+    title.text = @"三角洲行动";
     title.font = [UIFont systemFontOfSize:32 weight:UIFontWeightBold];
     title.textColor = [UIColor whiteColor];
     title.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:title];
-    
+
     UILabel *subtitle = [[UILabel alloc] init];
-    subtitle.text = @"TrollKit v2.1";
+    subtitle.text = @"防封辅助工具";
     subtitle.font = [UIFont systemFontOfSize:14 weight:UIFontWeightLight];
     subtitle.textColor = [UIColor colorWithRed:0.376 green:0.647 blue:0.980 alpha:1.0];
     subtitle.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:subtitle];
-    
+
     [NSLayoutConstraint activateConstraints:@[
         [title.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
         [title.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:120],
@@ -336,7 +330,7 @@ typedef struct {
     [self.view addSubview:card];
     
     self.keyField = [[UITextField alloc] init];
-    self.keyField.placeholder = @"Enter license key";
+    self.keyField.placeholder = @"请输入授权码";
     self.keyField.textAlignment = NSTextAlignmentCenter;
     self.keyField.textColor = [UIColor whiteColor];
     self.keyField.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightMedium];
@@ -348,7 +342,7 @@ typedef struct {
     [card addSubview:self.keyField];
     
     self.submitButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.submitButton setTitle:@"Authorize" forState:UIControlStateNormal];
+    [self.submitButton setTitle:@"验证授权" forState:UIControlStateNormal];
     self.submitButton.backgroundColor = [UIColor colorWithRed:0.376 green:0.647 blue:0.980 alpha:1.0];
     self.submitButton.tintColor = [UIColor whiteColor];
     self.submitButton.layer.cornerRadius = 12;
@@ -396,7 +390,7 @@ typedef struct {
 
 - (void)installClearKeyButton {
     UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [clearBtn setTitle:@"Clear Saved Key" forState:UIControlStateNormal];
+    [clearBtn setTitle:@"清除授权记录" forState:UIControlStateNormal];
     clearBtn.tintColor = [UIColor colorWithRed:0.588 green:0.659 blue:0.784 alpha:1.0];
     clearBtn.titleLabel.font = [UIFont systemFontOfSize:12];
     [clearBtn addTarget:self action:@selector(clearSavedKey:) forControlEvents:UIControlEventTouchUpInside];

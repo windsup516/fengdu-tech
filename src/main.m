@@ -14,6 +14,7 @@
 #import "LoginViewController.h"
 #import "AppViewController.h"
 #import "HUDController.h"
+#import "GameHooks.h"
 #import "XPFKernelInterface.h"
 
 // 外部函数声明 (来自 ExternalStubs.c 的 WEAK 存根)
@@ -70,16 +71,19 @@ static int call_jb_init(void) {
     return jb_init(); // WEAK stub
 }
 
+__attribute__((unused))
 static uint64_t call_physread64(uint64_t addr) {
     if (real_physread64) return real_physread64(addr);
     return physread64(addr);
 }
 
+__attribute__((unused))
 static int call_physwritebuf(uint64_t addr, void *buf, size_t sz) {
     if (real_physwritebuf) return real_physwritebuf(addr, buf, sz);
     return physwritebuf(addr, buf, sz);
 }
 
+__attribute__((unused))
 static uint64_t call_phystokv(uint64_t addr) {
     if (real_phystokv) return real_phystokv(addr);
     return phystokv(addr);
@@ -247,66 +251,75 @@ static void install_crash_handlers(void) {
     self.loginVC = [[LoginViewController alloc] init];
     __weak typeof(self) weakSelf = self;
     self.loginVC.onAuthorized = ^{
-        [weakSelf showMainMenu];
+        [weakSelf startCheatDirectly];
     };
 
     self.window.rootViewController = self.loginVC;
     [self.window makeKeyAndVisible];
 
-    // ===== 步骤6: 后台初始化 (不阻塞 UI) =====
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        if (weakSelf.environmentType >= 1) {
-            // 尝试解析内核符号 (仅在越狱下有效)
-            xpf_resolve_all_symbols();
-            xpf_setup_kcall_primitive();
-            SAFE_LOG("Background init complete (env=%d)", weakSelf.environmentType);
-        }
-    });
-
     return YES;
 }
 
-- (void)showMainMenu {
-    NSLog(@"[Stocks] showMainMenu: START");
+// 授权成功后直接启动悬浮窗 + 注入游戏（跳过武器选择页面）
+- (void)startCheatDirectly {
+    SAFE_LOG("授权成功，正在启动辅助...");
 
-    @try {
-        self.appVC = [[AppViewController alloc] init];
-        NSLog(@"[Stocks] AppViewController alloc OK");
-    } @catch (NSException *e) {
-        NSLog(@"[Stocks] AppViewController init CRASH: %@", e);
-        return;
+    // 获取 scene
+    id scene = self.window.windowScene;
+    if (!scene) {
+        scene = [UIApplication sharedApplication].connectedScenes.anyObject;
     }
 
-    // 确保 appVC.view 已被加载
+    // 创建悬浮窗
+    HUDController *hud = [HUDController shared];
     @try {
-        UIView *v = self.appVC.view;
-        if (!v) {
-            NSLog(@"[Stocks] AppViewController.view is nil!");
-            return;
+        [hud createWindowsOnScene:scene];
+        SAFE_LOG("HUD windows created OK");
+    } @catch (NSException *e) {
+        SAFE_LOG("HUD create failed: %s", [[e description] UTF8String]);
+    }
+
+    if (hud.windowsCreated) {
+        [hud show];
+        SAFE_LOG("HUD overlay started");
+    }
+
+    // 后台注入游戏
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        int result = hooks_attach_to_game();
+        if (result == 0) {
+            SAFE_LOG("游戏注入成功，正在扫描偏移...");
+            hooks_scan_offsets();
+        } else {
+            SAFE_LOG("游戏未检测到（错误码=%d），等待游戏启动后重试...", result);
+            // 每3秒重试一次
+            for (int i = 0; i < 20; i++) {
+                sleep(3);
+                result = hooks_attach_to_game();
+                if (result == 0) {
+                    SAFE_LOG("游戏注入成功！");
+                    hooks_scan_offsets();
+                    break;
+                }
+            }
         }
-        NSLog(@"[Stocks] AppViewController.view loaded OK");
-    } @catch (NSException *e) {
-        NSLog(@"[Stocks] AppViewController.view access CRASH: %@", e);
-        return;
-    }
+    });
 
-    // 直接替换 rootViewController，避免复杂的 view 动画
-    @try {
-        UIView *snapshot = [self.loginVC.view snapshotViewAfterScreenUpdates:NO];
-        if (snapshot) {
-            [self.appVC.view addSubview:snapshot];
-            [UIView animateWithDuration:0.3 animations:^{
-                snapshot.alpha = 0.0;
-            } completion:^(BOOL finished) {
-                [snapshot removeFromSuperview];
-            }];
-        }
-        self.window.rootViewController = self.appVC;
-        NSLog(@"[Stocks] showMainMenu: DONE");
-    } @catch (NSException *e) {
-        NSLog(@"[Stocks] showMainMenu transition CRASH: %@", e);
-    }
+    // 状态提示
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UILabel *hint = [[UILabel alloc] init];
+        hint.text = @"辅助已启动\n请打开游戏进入对局";
+        hint.numberOfLines = 2;
+        hint.textAlignment = NSTextAlignmentCenter;
+        hint.font = [UIFont systemFontOfSize:14];
+        hint.textColor = [UIColor colorWithRed:0.376 green:0.647 blue:0.980 alpha:1.0];
+        hint.frame = CGRectMake(0, 0, 250, 50);
+        hint.center = self.loginVC.view.center;
+        [self.loginVC.view addSubview:hint];
+    });
 }
+
+@end
 
 @end
 
