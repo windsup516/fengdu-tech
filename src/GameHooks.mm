@@ -8,7 +8,12 @@
 #import <mach/vm_map.h>
 #import <mach-o/loader.h>
 #import <sys/sysctl.h>
-#import <libproc.h>
+
+// proc_pidpath 手动声明 (libproc.h 在 iOS SDK 中不可用)
+#ifndef PROC_PIDPATHINFO_MAXSIZE
+#define PROC_PIDPATHINFO_MAXSIZE 4096
+#endif
+int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
 #import <dlfcn.h>
 
 #ifndef GAME_PROCESS_NAME
