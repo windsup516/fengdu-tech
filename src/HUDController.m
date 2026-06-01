@@ -14,6 +14,14 @@
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
 
+// UIWindow 私有方法声明
+@interface UIWindow (Private)
+- (unsigned int)_contextId;
+@end
+
+// attachWindowToHostingController 前置声明
+void attachWindowToHostingController(UIWindow *window, id hostingController);
+
 // 全局触摸窗口引用 (从反编译: qword_10139CB40)
 static TouchMainWindow *gTouchWindow = nil;
 
