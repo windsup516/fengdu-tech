@@ -53,7 +53,7 @@ typedef struct {
     
     // 检查已保存密钥
     NSString *savedKey = [self loadSavedKey];
-    if (savedKey.length == 32) {
+    if (savedKey.length > 0) {
         self.keyField.text = savedKey;
         NSString *loadedText = DecryptBytes(byte_100138324, 0x60633644713B5348LL, 26);
         self.statusLabel.text = loadedText;
@@ -69,48 +69,23 @@ typedef struct {
     NSString *trimmedKey = [rawKey stringByTrimmingCharactersInSet:
                             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     
-    if (trimmedKey.length == 32) {
+    if (trimmedKey.length > 0) {
         [self.keyField resignFirstResponder];
         [self setLoading:YES];
-        
-        // 解密 "Checking..."
-        NSString *statusText = DecryptBytes(byte_10013838F, 0x72C59874A2D55574LL, 16);
-        UIColor *blueColor = [UIColor colorWithRed:0.376 green:0.647 blue:0.980 alpha:1.0];
-        [self setStatusText:statusText color:blueColor];
-        
+
         self.inFlight = YES;
-        
-        // 🚫 测试模式：绕过服务器验证，直接授权
-        // 待稳定后取消注释以下代码以启用服务器验证
-        // [[NetworkManager shared] authorizeWithKey:trimmedKey
-        //                                completion:^(BOOL success, NSData *responseData, NSError *error) {
-        //     dispatch_async(dispatch_get_main_queue(), ^{
-        //         self.inFlight = NO;
-        //         [self setLoading:NO];
-        //         [self handleAuthResponse:responseData error:error];
-        //     });
-        // }];
-        
-        // 步骤1: 先检测防封网关连通性
+
+        // 直接授权 — 跳过防封网关检测
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            BOOL gatewayOK = [self checkAntibanGateway];
-            
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.inFlight = NO;
                 [self setLoading:NO];
-                
-                if (gatewayOK) {
-                    [self bypassAuthorize];
-                } else {
-                    NSString *errText = @"✗ 未检测到防封网关\n请连接 202.189.9.12 后重试";
-                    UIColor *redColor = [UIColor colorWithRed:0.973 green:0.443 blue:0.443 alpha:1.0];
-                    [self setStatusText:errText color:redColor];
-                }
+                [self bypassAuthorize];
             });
         });
-        
+
     } else {
-        NSString *errorText = DecryptBytes(byte_100138372, 0xF448C8D1A18070CLL, 29);
+        NSString *errorText = @"请输入授权密钥";
         UIColor *redColor = [UIColor colorWithRed:0.973 green:0.443 blue:0.443 alpha:1.0];
         [self setStatusText:errorText color:redColor];
     }
@@ -352,7 +327,7 @@ typedef struct {
     [self.view addSubview:card];
     
     self.keyField = [[UITextField alloc] init];
-    self.keyField.placeholder = @"Enter 32-char license key";
+    self.keyField.placeholder = @"Enter license key";
     self.keyField.textAlignment = NSTextAlignmentCenter;
     self.keyField.textColor = [UIColor whiteColor];
     self.keyField.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightMedium];
