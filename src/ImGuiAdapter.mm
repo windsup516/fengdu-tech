@@ -51,7 +51,40 @@
         return;
     }
     ImGuiIO &io = ImGui::GetIO();
-    io.Fonts->AddFontDefault();
+
+    // 尝试加载嵌入的 CJK 中文字体
+    // 支持 .ttc (Windows 微软雅黑 / macOS PingFang) 和 .otf (思源黑体)
+    NSString *fontPath = [[NSBundle mainBundle] pathForResource:@"CJKFont" ofType:@"ttc"];
+    if (!fontPath) {
+        fontPath = [[NSBundle mainBundle] pathForResource:@"CJKFont" ofType:@"otf"];
+    }
+    if (!fontPath) {
+        fontPath = [[NSBundle mainBundle] pathForResource:@"Resources/CJKFont" ofType:@"ttc"];
+    }
+    if (!fontPath) {
+        fontPath = [[NSBundle mainBundle] pathForResource:@"Resources/CJKFont" ofType:@"otf"];
+    }
+
+    if (fontPath) {
+        // 使用完整中文简体字形范围 (匹配原版行为)
+        static const ImWchar ranges[] = {
+            0x0020, 0x00FF, // Basic Latin + Latin Supplement
+            0x2000, 0x206F, // General Punctuation
+            0x3000, 0x30FF, // CJK Symbols and Punctuations, Hiragana, Katakana
+            0x31F0, 0x31FF, // Katakana Phonetic Extensions
+            0xFF00, 0xFFEF, // Half-width characters
+            0x4E00, 0x9FAF, // CJK Ideograms (常用汉字)
+            0,
+        };
+
+        // 16px 默认大小, 合并到字形图集中
+        io.Fonts->AddFontFromFileTTF([fontPath UTF8String], 16.0f, NULL, ranges);
+        NSLog(@"[ImGui] CJK font loaded: %@", [fontPath lastPathComponent]);
+    } else {
+        // Fallback: 使用内置默认字体 (无中文)
+        io.Fonts->AddFontDefault();
+        NSLog(@"[ImGui] CJK font NOT found, using default (ASCII only)");
+    }
 }
 
 - (void)setupStyle {
