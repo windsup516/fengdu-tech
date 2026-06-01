@@ -355,12 +355,12 @@ static void install_crash_handlers(void) {
 
     // 后台: 先启动游戏, 再注入
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        // 步骤1: 自动打开三角洲行动 (主线程执行, 同步等待)
-        dispatch_sync(dispatch_get_main_queue(), ^{
+        // 步骤1: 自动打开三角洲行动 (主线程异步, 避免 openApplication 导致死锁)
+        dispatch_async(dispatch_get_main_queue(), ^{
             [self launchDeltaForceGame];
         });
-        // 给游戏一点启动时间
-        sleep(2);
+        // 给游戏启动时间
+        sleep(3);
 
         // 步骤2: 注入游戏（带重试）
         int result = hooks_attach_to_game();
@@ -373,7 +373,7 @@ static void install_crash_handlers(void) {
                 sleep(2);
                 // 前几次没找到就再尝试启动
                 if (i == 3 || i == 8 || i == 15) {
-                    dispatch_sync(dispatch_get_main_queue(), ^{
+                    dispatch_async(dispatch_get_main_queue(), ^{
                         [self launchDeltaForceGame];
                     });
                 }
