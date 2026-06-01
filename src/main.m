@@ -58,7 +58,7 @@ static void log_to_file(const char *tag, const char *fmt, ...) {
         fprintf(g_logFile, "%s [%s] ", time_buf, tag);
         va_list args2;
         va_copy(args2, args);
-        vfprintf(g_logFile, args2, fmt);
+        vfprintf(g_logFile, fmt, args2);
         va_end(args2);
         fprintf(g_logFile, "\n");
         fflush(g_logFile);

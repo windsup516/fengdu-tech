@@ -446,7 +446,7 @@
         HUDController *hud = [HUDController shared];
 
         // 获取当前 window scene (延迟到激活时获取，避免登录流程中崩溃)
-        id scene = nil;
+        __block id scene = nil;
         dispatch_sync(dispatch_get_main_queue(), ^{
             scene = [UIApplication sharedApplication].delegate.window.windowScene;
             if (!scene) {
