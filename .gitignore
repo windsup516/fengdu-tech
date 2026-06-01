@@ -1,0 +1,23 @@
+# 编译产物
+*.o
+*.d
+*.deb
+*.tipa
+*.ipa
+.theos/
+packages/
+
+# IDE / 系统文件
+.DS_Store
+Thumbs.db
+
+# IDA 反编译缓存 (从原版复制过来的无用文件)
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+*.dmp
+
+# 占位文件 (已有真实 .dylib 替换)
+Frameworks/.gitkeep

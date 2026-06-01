@@ -1,0 +1,59 @@
+name: Build Stocks.tipa
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install tools
+        run: brew install ldid xz || true
+
+      - name: Setup theos
+        run: |
+          if [ ! -d /tmp/theos ]; then
+            git clone --depth 1 --recursive https://github.com/theos/theos.git /tmp/theos
+          fi
+          echo "THEOS=/tmp/theos" >> $GITHUB_ENV
+
+      - name: Cache SDK
+        uses: actions/cache@v4
+        with:
+          path: /tmp/theos/sdks
+          key: iphoneos-16.5-sdk
+
+      - name: Download iPhoneOS 16.5 SDK
+        run: |
+          SDK_DIR="/tmp/theos/sdks"
+          mkdir -p "$SDK_DIR"
+          if [ ! -f "$SDK_DIR/iPhoneOS16.5.sdk.tar.xz" ]; then
+            curl -L --retry 5 --retry-delay 5 \
+              -o "$SDK_DIR/iPhoneOS16.5.sdk.tar.xz" \
+              "https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
+          fi
+          if [ ! -d "$SDK_DIR/iPhoneOS16.5.sdk" ]; then
+            tar -xJf "$SDK_DIR/iPhoneOS16.5.sdk.tar.xz" -C "$SDK_DIR/"
+          fi
+          ls -la "$SDK_DIR/"
+
+      - name: Build
+        run: |
+          export THEOS=/tmp/theos
+          make clean 2>/dev/null || true
+          make package FINAL_PACKAGE=1
+
+      - name: Upload Stocks.tipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stocks-tipa-${{ github.sha }}
+          path: packages/Stocks.tipa
+          if-no-files-found: error
