@@ -128,5 +128,3 @@ int xpf_sandbox_escape(uint64_t proc) {
 int xpf_ppl_bypass_init(void) { return 0; }
 int xpf_bypass_developer_mode(void) { return 0; }
 int xpf_disable_amfi(void) { return 0; }
-
-void xpf_setup_kcall_primitive(void) {}
