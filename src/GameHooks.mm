@@ -13,7 +13,7 @@
 #ifndef PROC_PIDPATHINFO_MAXSIZE
 #define PROC_PIDPATHINFO_MAXSIZE 4096
 #endif
-int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
+extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
 #import <dlfcn.h>
 
 #ifndef GAME_PROCESS_NAME
