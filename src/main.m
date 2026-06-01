@@ -338,42 +338,68 @@ static void install_crash_handlers(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *gamePath = nil;
 
-    // 方法1: 通过 LSApplicationWorkspace 获取已安装应用的 bundle 路径
+    // 方法1: 太阳神方式 — 通过 applicationProxyForIdentifier: 直接获取指定 Bundle ID 的代理
+    // 太阳神 sub_100093630: LSApplicationWorkspace -> applicationProxyForIdentifier: -> bundleURL/canonicalExecutablePath
+    // 这个方法比遍历 allApplications 更可靠 (iOS 15+ allApplications 可能返回空)
     Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
     if (workspaceClass) {
         id workspace = [workspaceClass performSelector:@selector(defaultWorkspace)];
-        NSArray *allApps = [workspace performSelector:@selector(allApplications)];
-        for (id app in allApps) {
+
+        // 获取 applicationProxyForIdentifier: 选择器
+        SEL proxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
+        NSArray *knownBIDs = @[
+            @"com.tencent.tmgp.dfm",
+            @"com.tencent.tmgp.deltaforce",
+            @"com.tencent.deltaforce",
+            @"com.proximabeta.deltaforce",
+            @"com.garena.game.dfm",
+        ];
+
+        for (NSString *bid in knownBIDs) {
             @try {
-                NSString *bundleID = [app performSelector:@selector(bundleIdentifier)];
-                if ([bundleID containsString:@"dfm"] || [bundleID containsString:@"deltaforce"] ||
-                    [bundleID containsString:@"DeltaForce"]) {
-                    // LSApplicationProxy 有 bundleURL 或 bundleContainerURL 属性
-                    NSURL *bundleURL = nil;
-                    if ([app respondsToSelector:@selector(bundleURL)]) {
-                        bundleURL = [app performSelector:@selector(bundleURL)];
+                id appProxy = [workspace performSelector:proxySel withObject:bid];
+                if (!appProxy) {
+                    SAFE_LOG("applicationProxyForIdentifier: %s -> nil", [bid UTF8String]);
+                    continue;
+                }
+                SAFE_LOG("applicationProxyForIdentifier: %s -> %s", [bid UTF8String],
+                         [NSStringFromClass([appProxy class]) UTF8String]);
+
+                // 尝试 canonicalExecutablePath (太阳神方式 — 直接拿可执行文件路径)
+                if ([appProxy respondsToSelector:@selector(canonicalExecutablePath)]) {
+                    NSString *execPath = [appProxy performSelector:@selector(canonicalExecutablePath)];
+                    SAFE_LOG("  canonicalExecutablePath: %s", execPath ? [execPath UTF8String] : "(nil)");
+                    if (execPath && [execPath length] > 0) {
+                        // executable 在 .app/ 目录下
+                        gamePath = [execPath stringByDeletingLastPathComponent];
                     }
-                    if (!bundleURL && [app respondsToSelector:@selector(bundleContainerURL)]) {
-                        bundleURL = [app performSelector:@selector(bundleContainerURL)];
-                    }
+                }
+
+                // 尝试 bundleURL
+                if (!gamePath && [appProxy respondsToSelector:@selector(bundleURL)]) {
+                    NSURL *bundleURL = [appProxy performSelector:@selector(bundleURL)];
+                    SAFE_LOG("  bundleURL: %s", bundleURL ? [[bundleURL path] UTF8String] : "(nil)");
                     if (bundleURL) {
                         gamePath = [bundleURL path];
                     }
-                    // 也尝试直接获取路径
-                    if (!gamePath && [app respondsToSelector:@selector(canonicalExecutablePath)]) {
-                        NSString *execPath = [app performSelector:@selector(canonicalExecutablePath)];
-                        if (execPath) {
-                            gamePath = [[execPath stringByDeletingLastPathComponent] stringByDeletingLastPathComponent];
-                            // executable is in .app/ so go up one level to get .app
-                            gamePath = [execPath stringByDeletingLastPathComponent];
-                        }
-                    }
-                    if (gamePath) {
-                        SAFE_LOG("通过 LSApplicationWorkspace 找到: %s (%s)", [gamePath UTF8String], [bundleID UTF8String]);
-                        break;
+                }
+
+                // 尝试 bundleContainerURL
+                if (!gamePath && [appProxy respondsToSelector:@selector(bundleContainerURL)]) {
+                    NSURL *containerURL = [appProxy performSelector:@selector(bundleContainerURL)];
+                    SAFE_LOG("  bundleContainerURL: %s", containerURL ? [[containerURL path] UTF8String] : "(nil)");
+                    if (containerURL) {
+                        gamePath = [containerURL path];
                     }
                 }
-            } @catch (NSException *e) {}
+
+                if (gamePath) {
+                    SAFE_LOG("通过 applicationProxyForIdentifier: 找到游戏路径: %s", [gamePath UTF8String]);
+                    break;
+                }
+            } @catch (NSException *e) {
+                SAFE_LOG("applicationProxyForIdentifier: %s 异常: %s", [bid UTF8String], [[e description] UTF8String]);
+            }
         }
     }
 
