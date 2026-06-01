@@ -321,8 +321,6 @@ static void install_crash_handlers(void) {
 
 @end
 
-@end
-
 // 入口 (兼容 TrollStore 和 Xcode 编译)
 int main(int argc, char *argv[]) {
     @autoreleasepool {
