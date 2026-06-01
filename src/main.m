@@ -189,6 +189,7 @@ static void install_crash_handlers(void) {
 @property (nonatomic, strong) AppViewController *appVC;
 @property (nonatomic) int environmentType; // 0=普通, 1=TrollStore, 2=越狱
 @property (nonatomic) BOOL cheatStarted; // 防止重复启动
+@property (nonatomic, strong) NSString *gameBundlePath; // 缓存的游戏包路径
 @end
 
 @implementation AppDelegate
@@ -334,61 +335,100 @@ static void install_crash_handlers(void) {
 - (void)inspectGameBundle {
     SAFE_LOG("=== 开始探查 DeltaForceClient.app ===");
 
-    // 遍历 /var/containers/Bundle/Application/ 查找 DeltaForceClient.app
-    NSString *bundleRoot = @"/var/containers/Bundle/Application";
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSArray *uuids = [fm contentsOfDirectoryAtPath:bundleRoot error:nil];
-
     NSString *gamePath = nil;
-    for (NSString *uuid in uuids) {
-        NSString *path = [bundleRoot stringByAppendingPathComponent:uuid];
-        NSArray *apps = [fm contentsOfDirectoryAtPath:path error:nil];
-        for (NSString *app in apps) {
-            if ([app containsString:@"DeltaForce"] || [app containsString:@"dfm"]) {
-                gamePath = [path stringByAppendingPathComponent:app];
-                break;
-            }
+
+    // 方法1: 通过 LSApplicationWorkspace 获取已安装应用的 bundle 路径
+    Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
+    if (workspaceClass) {
+        id workspace = [workspaceClass performSelector:@selector(defaultWorkspace)];
+        NSArray *allApps = [workspace performSelector:@selector(allApplications)];
+        for (id app in allApps) {
+            @try {
+                NSString *bundleID = [app performSelector:@selector(bundleIdentifier)];
+                if ([bundleID containsString:@"dfm"] || [bundleID containsString:@"deltaforce"] ||
+                    [bundleID containsString:@"DeltaForce"]) {
+                    // LSApplicationProxy 有 bundleURL 或 bundleContainerURL 属性
+                    NSURL *bundleURL = nil;
+                    if ([app respondsToSelector:@selector(bundleURL)]) {
+                        bundleURL = [app performSelector:@selector(bundleURL)];
+                    }
+                    if (!bundleURL && [app respondsToSelector:@selector(bundleContainerURL)]) {
+                        bundleURL = [app performSelector:@selector(bundleContainerURL)];
+                    }
+                    if (bundleURL) {
+                        gamePath = [bundleURL path];
+                    }
+                    // 也尝试直接获取路径
+                    if (!gamePath && [app respondsToSelector:@selector(canonicalExecutablePath)]) {
+                        NSString *execPath = [app performSelector:@selector(canonicalExecutablePath)];
+                        if (execPath) {
+                            gamePath = [[execPath stringByDeletingLastPathComponent] stringByDeletingLastPathComponent];
+                            // executable is in .app/ so go up one level to get .app
+                            gamePath = [execPath stringByDeletingLastPathComponent];
+                        }
+                    }
+                    if (gamePath) {
+                        SAFE_LOG("通过 LSApplicationWorkspace 找到: %s (%s)", [gamePath UTF8String], [bundleID UTF8String]);
+                        break;
+                    }
+                }
+            } @catch (NSException *e) {}
         }
-        if (gamePath) break;
     }
 
+    // 方法2: 尝试已知的固定路径模式
     if (!gamePath) {
-        SAFE_LOG("未找到 DeltaForceClient.app (路径不存在或无权访问)");
-        // 尝试备用路径
-        gamePath = @"/var/containers/Bundle/Application/*/DeltaForceClient.app";
-        SAFE_LOG("尝试通配符路径: %s", [gamePath UTF8String]);
+        NSString *bundleRoot = @"/var/containers/Bundle/Application";
+        NSArray *uuids = [fm contentsOfDirectoryAtPath:bundleRoot error:nil];
+        for (NSString *uuid in uuids) {
+            NSString *path = [bundleRoot stringByAppendingPathComponent:uuid];
+            NSArray *apps = [fm contentsOfDirectoryAtPath:path error:nil];
+            for (NSString *app in apps) {
+                if ([app containsString:@"DeltaForce"] || [app containsString:@"dfm"] || [app containsString:@"DFM"]) {
+                    gamePath = [path stringByAppendingPathComponent:app];
+                    SAFE_LOG("通过目录遍历找到: %s", [gamePath UTF8String]);
+                    break;
+                }
+            }
+            if (gamePath) break;
+        }
+    }
+
+    if (!gamePath || ![fm fileExistsAtPath:gamePath]) {
+        SAFE_LOG("未找到 DeltaForceClient.app — LSApplicationWorkspace 和目录遍历均失败");
+        SAFE_LOG("=== 游戏包探查完成 (失败) ===");
+        return;
     }
 
     SAFE_LOG("游戏路径: %s", [gamePath UTF8String]);
 
-    if (gamePath && [fm fileExistsAtPath:gamePath]) {
-        // 列出 .app 根目录
-        NSArray *rootFiles = [fm contentsOfDirectoryAtPath:gamePath error:nil];
-        for (NSString *f in rootFiles) {
-            BOOL isDir = NO;
-            NSString *fullPath = [gamePath stringByAppendingPathComponent:f];
-            [fm fileExistsAtPath:fullPath isDirectory:&isDir];
-            unsigned long long size = [[fm attributesOfItemAtPath:fullPath error:nil] fileSize];
-            if (isDir) {
-                SAFE_LOG("  [DIR]  %s/", [f UTF8String]);
-            } else {
-                SAFE_LOG("  [FILE] %s (%llu bytes)", [f UTF8String], size);
-            }
-        }
-
-        // 列出 Frameworks 目录下的 dylib
-        NSString *fwPath = [gamePath stringByAppendingPathComponent:@"Frameworks"];
-        if ([fm fileExistsAtPath:fwPath]) {
-            NSArray *fwFiles = [fm contentsOfDirectoryAtPath:fwPath error:nil];
-            SAFE_LOG("--- Frameworks/ (%lu items) ---", (unsigned long)fwFiles.count);
-            for (NSString *f in fwFiles) {
-                NSString *fullPath = [fwPath stringByAppendingPathComponent:f];
-                unsigned long long size = [[fm attributesOfItemAtPath:fullPath error:nil] fileSize];
-                SAFE_LOG("  %s (%llu bytes)", [f UTF8String], size);
-            }
+    // 列出 .app 根目录
+    NSArray *rootFiles = [fm contentsOfDirectoryAtPath:gamePath error:nil];
+    for (NSString *f in rootFiles) {
+        BOOL isDir = NO;
+        NSString *fullPath = [gamePath stringByAppendingPathComponent:f];
+        [fm fileExistsAtPath:fullPath isDirectory:&isDir];
+        unsigned long long size = [[fm attributesOfItemAtPath:fullPath error:nil] fileSize];
+        if (isDir) {
+            SAFE_LOG("  [DIR]  %s/", [f UTF8String]);
         } else {
-            SAFE_LOG("Frameworks/ 目录不存在");
+            SAFE_LOG("  [FILE] %s (%llu bytes)", [f UTF8String], size);
         }
+    }
+
+    // 列出 Frameworks 目录下的 dylib
+    NSString *fwPath = [gamePath stringByAppendingPathComponent:@"Frameworks"];
+    if ([fm fileExistsAtPath:fwPath]) {
+        NSArray *fwFiles = [fm contentsOfDirectoryAtPath:fwPath error:nil];
+        SAFE_LOG("--- Frameworks/ (%lu items) ---", (unsigned long)fwFiles.count);
+        for (NSString *f in fwFiles) {
+            NSString *fullPath = [fwPath stringByAppendingPathComponent:f];
+            unsigned long long size = [[fm attributesOfItemAtPath:fullPath error:nil] fileSize];
+            SAFE_LOG("  %s (%llu bytes)", [f UTF8String], size);
+        }
+    } else {
+        SAFE_LOG("Frameworks/ 目录不存在");
     }
 
     SAFE_LOG("=== 游戏包探查完成 ===");
