@@ -16,9 +16,28 @@
 @implementation HUDMainWindow
 
 - (instancetype)initWithFrame:(CGRect)frame {
-    // 原版: 调用 _initWithFrame:attached: (UIWindow 私有方法)
-    // 由于无法直接调用私有方法，使用 initWithFrame: 替代
-    // 然后调用 commonInit 完成初始化
+    // 太阳神使用 _initWithFrame:attached: (UIWindow 私有方法)
+    // attached:NO 使窗口独立于主应用的窗口服务器连接
+    // 这对于 SBS 托管至关重要
+    SEL privateInitSel = NSSelectorFromString(@"_initWithFrame:attached:");
+    if ([self respondsToSelector:privateInitSel]) {
+        // 使用 NSInvocation 调用带 CGRect 参数的私有方法
+        NSMethodSignature *sig = [self methodSignatureForSelector:privateInitSel];
+        if (sig) {
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setTarget:self];
+            [inv setSelector:privateInitSel];
+            // _initWithFrame:attached: 第二个参数是 BOOL attached
+            BOOL attached = NO;
+            [inv setArgument:&frame atIndex:2];
+            [inv setArgument:&attached atIndex:3];
+            [inv invoke];
+            [self commonInit];
+            return self;
+        }
+    }
+
+    // Fallback: 标准初始化
     self = [super initWithFrame:frame];
     if (self) {
         [self commonInit];

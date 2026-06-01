@@ -14,6 +14,31 @@
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
 
+// 文件日志 — 与 main.m 的 SAFE_LOG 写入同一个文件
+static FILE *g_hudLogFile = NULL;
+static void hud_log(NSString *fmt, ...) {
+    if (!g_hudLogFile) {
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        if (paths.count > 0) {
+            NSString *logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
+            g_hudLogFile = fopen([logPath UTF8String], "a");
+        }
+    }
+    va_list args;
+    va_start(args, fmt);
+    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
+    va_end(args);
+    fprintf(stderr, "[HUD] %s\n", [msg UTF8String]);
+    if (g_hudLogFile) {
+        time_t now = time(NULL);
+        struct tm *tm_info = localtime(&now);
+        char time_buf[16];
+        strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
+        fprintf(g_hudLogFile, "%s [HUD] %s\n", time_buf, [msg UTF8String]);
+        fflush(g_hudLogFile);
+    }
+}
+
 // UIWindow 私有方法声明
 @interface UIWindow (Private)
 - (unsigned int)_contextId;
@@ -95,7 +120,7 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
 
     // 确保在主线程 + 窗口 scene 已就绪
     if (!scene) {
-        NSLog(@"[HUD] createWindowsOnScene: scene is nil, aborting");
+        hud_log(@"createWindowsOnScene: scene is nil, aborting");
         self.windowsCreated = NO;
         return;
     }
@@ -132,44 +157,91 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         @try {
             [self setupHostingController];
         } @catch (NSException *e) {
-            NSLog(@"[HUD] Hosting controller setup failed: %@", e);
+            hud_log(@"Hosting controller setup failed: %@", e);
         }
 
         // 步骤6: 同步方向
         [self.rootVC syncCurrentOrientation];
 
+        // 步骤7: 后台保活 (SBS 不可用时的备选方案)
+        [self setupBackgroundKeepAlive];
+
         // 步骤8: HID 回调 (可能失败，非致命)
         @try {
             [self registerHIDEventCallback];
         } @catch (NSException *e) {
-            NSLog(@"[HUD] HID callback registration failed: %@", e);
+            hud_log(@"HID callback registration failed: %@", e);
         }
 
-        NSLog(@"[HUD] Windows created: hudLevel=10000010 touchLevel=10000011");
+        hud_log(@"Windows created: hudLevel=10000010 touchLevel=10000011");
     } @catch (NSException *e) {
-        NSLog(@"[HUD] createWindowsOnScene FATAL: %@", e);
+        hud_log(@"createWindowsOnScene FATAL: %@", e);
         self.windowsCreated = NO;
     }
 }
 
 - (void)setupHostingController {
-    // 直接使用 SBS 类名 — 原版的 XOR 解密数据提取错误，全部解密为 0x60
     Class hostingClass = NSClassFromString(@"SBSAccessibilityWindowHostingController");
+
+    hud_log(@"SBS class lookup: %@", hostingClass ? NSStringFromClass(hostingClass) : @"NIL");
 
     if (hostingClass) {
         self.hostingController = [[hostingClass alloc] init];
 
         if (self.hudWindow) {
+            // 获取窗口诊断信息
+            unsigned int hudCtx = 0;
+            if ([self.hudWindow respondsToSelector:@selector(_contextId)]) {
+                hudCtx = (unsigned int)[self.hudWindow _contextId];
+            }
+            hud_log(@"HUD window ctx=%u level=%.0f", hudCtx, self.hudWindow.windowLevel);
             attachWindowToHostingController(self.hudWindow, self.hostingController);
         }
         if (self.touchWindow) {
+            unsigned int touchCtx = 0;
+            if ([self.touchWindow respondsToSelector:@selector(_contextId)]) {
+                touchCtx = (unsigned int)[self.touchWindow _contextId];
+            }
+            hud_log(@"Touch window ctx=%u level=%.0f", touchCtx, self.touchWindow.windowLevel);
             attachWindowToHostingController(self.touchWindow, self.hostingController);
         }
 
-        NSLog(@"[HUD] SBS hosting OK: %@", NSStringFromClass(hostingClass));
+        hud_log(@"SBS hosting OK: %@", NSStringFromClass(hostingClass));
     } else {
-        NSLog(@"[HUD] SBS hosting UNAVAILABLE on this iOS");
+        hud_log(@"SBS hosting UNAVAILABLE on this iOS — will use background keep-alive fallback");
     }
+}
+
+- (void)setupBackgroundKeepAlive {
+    // SBS 托管不可用时的备选方案:
+    // 使用后台任务 + 定期刷新窗口，尽可能保持窗口可见
+    __weak typeof(self) weakSelf = self;
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillResignActiveNotification
+                                                       object:nil
+                                                        queue:[NSOperationQueue mainQueue]
+                                                   usingBlock:^(NSNotification *note) {
+        hud_log(@"App will resign active — forcing window refresh");
+        // 延迟重新显示窗口 (等系统完成后台过渡)
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            weakSelf.hudWindow.hidden = NO;
+            weakSelf.touchWindow.hidden = NO;
+            [weakSelf.hudWindow makeKeyAndVisible];
+            [weakSelf.touchWindow makeKeyAndVisible];
+            hud_log(@"Windows forced visible after background transition");
+        });
+    }];
+
+    // 监听回到前台
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
+                                                       object:nil
+                                                        queue:[NSOperationQueue mainQueue]
+                                                   usingBlock:^(NSNotification *note) {
+        if (weakSelf.showing) {
+            weakSelf.hudWindow.hidden = NO;
+            weakSelf.touchWindow.hidden = NO;
+            hud_log(@"Windows restored on become active");
+        }
+    }];
 }
 
 - (void)registerHIDEventCallback {
@@ -185,7 +257,8 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         self.touchWindow.hidden = NO;
         self.showing = YES;
         [self.rootVC prepareForEntryAnimation];
-        NSLog(@"[HUD] Windows now visible");
+        hud_log(@"Windows now visible (hudLevel=%.0f touchLevel=%.0f)",
+                self.hudWindow.windowLevel, self.touchWindow.windowLevel);
     };
 
     if ([NSThread isMainThread]) {
@@ -194,8 +267,7 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         dispatch_async(dispatch_get_main_queue(), showBlock);
     }
 
-    // 游戏注入由 startCheatDirectly 统一管理（带重试循环）
-    NSLog(@"[HUD] Shown");
+    hud_log(@"Shown");
 }
 
 - (void)hide {
@@ -204,7 +276,7 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         self.touchWindow.hidden = YES;
         self.showing = NO;
     });
-    NSLog(@"[HUD] Hidden");
+    hud_log(@"Hidden");
 }
 
 - (void)syncTouchWindowToPanel {
@@ -226,15 +298,17 @@ void attachWindowToHostingController(UIWindow *window, id hostingController) {
         // 太阳神使用 registerWindowWithContextID:atLevel: 而非 registerWindow:contextID:windowLevel:
         SEL registerSel = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
         if (![hostingController respondsToSelector:registerSel]) {
-            NSLog(@"[HUD] Hosting controller does not respond to registerWindowWithContextID:atLevel:");
+            hud_log(@"Hosting controller does NOT respond to registerWindowWithContextID:atLevel:");
             return;
         }
+        hud_log(@"Hosting controller responds to registerWindowWithContextID:atLevel: ✓");
 
         // 获取窗口的 _contextId (UIScene 上下文 ID)
         unsigned int contextId = 0;
         if ([window respondsToSelector:@selector(_contextId)]) {
             contextId = (unsigned int)[window _contextId];
         }
+        hud_log(@"Window _contextId=%u level=%.0f class=%@", contextId, window.windowLevel, NSStringFromClass([window class]));
 
         double winLevel = window.windowLevel;
 
@@ -249,8 +323,8 @@ void attachWindowToHostingController(UIWindow *window, id hostingController) {
         [inv setArgument:&winLevel atIndex:3];
         [inv invoke];
 
-        NSLog(@"[HUD] Window registered via NSInvocation: ctx=%u level=%.0f", contextId, winLevel);
+        hud_log(@"Window registered via NSInvocation: ctx=%u level=%.0f", contextId, winLevel);
     } @catch (NSException *e) {
-        NSLog(@"[HUD] attachWindowToHostingController failed: %@", e);
+        hud_log(@"attachWindowToHostingController failed: %@", e);
     }
 }

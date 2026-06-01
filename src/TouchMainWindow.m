@@ -28,7 +28,22 @@ static BOOL g_useRotatedSize = NO;
 @implementation TouchMainWindow
 
 - (instancetype)initWithFrame:(CGRect)frame {
-    self = [super initWithFrame:frame];
+    // 太阳神使用 _initWithFrame:attached: 初始化 (私有无附加模式)
+    SEL privateInitSel = NSSelectorFromString(@"_initWithFrame:attached:");
+    if ([self respondsToSelector:privateInitSel]) {
+        NSMethodSignature *sig = [self methodSignatureForSelector:privateInitSel];
+        if (sig) {
+            NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+            [inv setTarget:self];
+            [inv setSelector:privateInitSel];
+            BOOL attached = NO;
+            [inv setArgument:&frame atIndex:2];
+            [inv setArgument:&attached atIndex:3];
+            [inv invoke];
+        }
+    } else {
+        self = [super initWithFrame:frame];
+    }
     if (self) {
         self.backgroundColor = [UIColor clearColor];
 
