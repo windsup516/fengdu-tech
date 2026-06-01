@@ -386,7 +386,7 @@ pid_t hooks_get_game_pid(void) { return g_gamePid; }
 BOOL hooks_is_attached(void) { return g_attached; }
 
 // XPF 兼容的内核附加 (TrollStore 下仅回退到 task_for_pid)
-static kern_return_t game_hooks_attach_kernel_task(uint64_t proc, mach_port_t *task) {
+__unused static kern_return_t game_hooks_attach_kernel_task(uint64_t proc, mach_port_t *task) {
     (void)proc;
     *task = g_gameTask;
     return g_gameTask != MACH_PORT_NULL ? KERN_SUCCESS : KERN_FAILURE;
