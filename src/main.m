@@ -357,7 +357,10 @@ static void install_crash_handlers(void) {
 
         for (NSString *bid in knownBIDs) {
             @try {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
                 id appProxy = [workspace performSelector:proxySel withObject:bid];
+#pragma clang diagnostic pop
                 if (!appProxy) {
                     SAFE_LOG("applicationProxyForIdentifier: %s -> nil", [bid UTF8String]);
                     continue;
