@@ -10,29 +10,27 @@
 
 @implementation SceneDelegate
 
-- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+- (void)scene:(UIScene *)scene willConnectToSession:(__unused UISceneSession *)session options:(__unused UISceneConnectionOptions *)connectionOptions {
     if (![scene isKindOfClass:[UIWindowScene class]]) return;
 
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     id<UIApplicationDelegate> appDelegate = [UIApplication sharedApplication].delegate;
 
-    // 尝试从 AppDelegate 获取已创建的 window
     UIWindow *existingWindow = nil;
     if ([appDelegate respondsToSelector:@selector(window)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
         existingWindow = [appDelegate performSelector:@selector(window)];
+#pragma clang diagnostic pop
     }
 
     if (existingWindow) {
-        // 挂载 AppDelegate 的 window 到这个 scene
         existingWindow.windowScene = windowScene;
-
-        // 如果 window 还没 visible, 现在做
         if (existingWindow.hidden) {
             existingWindow.hidden = NO;
             [existingWindow makeKeyAndVisible];
         }
     } else {
-        // AppDelegate 还没创建 window, 我们自己创建一个备份
         self.window = [[UIWindow alloc] initWithFrame:windowScene.coordinateSpace.bounds];
         self.window.windowScene = windowScene;
         self.window.rootViewController = [[UIViewController alloc] init];
@@ -41,10 +39,10 @@
     }
 }
 
-- (void)sceneDidDisconnect:(UIScene *)scene {}
-- (void)sceneDidBecomeActive:(UIScene *)scene {}
-- (void)sceneWillResignActive:(UIScene *)scene {}
-- (void)sceneWillEnterForeground:(UIScene *)scene {}
-- (void)sceneDidEnterBackground:(UIScene *)scene {}
+- (void)sceneDidDisconnect:(__unused UIScene *)scene {}
+- (void)sceneDidBecomeActive:(__unused UIScene *)scene {}
+- (void)sceneWillResignActive:(__unused UIScene *)scene {}
+- (void)sceneWillEnterForeground:(__unused UIScene *)scene {}
+- (void)sceneDidEnterBackground:(__unused UIScene *)scene {}
 
 @end
