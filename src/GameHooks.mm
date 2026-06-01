@@ -50,6 +50,31 @@ static BOOL g_attached = NO;
 static kern_return_t game_read(mach_port_t task, uint64_t addr, void *buf, size_t size);
 static kern_return_t game_write(mach_port_t task, uint64_t addr, const void *buf, size_t size);
 
+// 文件日志 — 与 main.m 的 SAFE_LOG 写入同一个 debug.log
+static FILE *g_hooksLogFile = NULL;
+static void hooks_log(NSString *fmt, ...) {
+    if (!g_hooksLogFile) {
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        if (paths.count > 0) {
+            NSString *logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
+            g_hooksLogFile = fopen([logPath UTF8String], "a");
+        }
+    }
+    va_list args;
+    va_start(args, fmt);
+    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
+    va_end(args);
+    fprintf(stderr, "[Hooks] %s\n", [msg UTF8String]);
+    if (g_hooksLogFile) {
+        time_t now = time(NULL);
+        struct tm *tm_info = localtime(&now);
+        char time_buf[16];
+        strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
+        fprintf(g_hooksLogFile, "%s [Hooks] %s\n", time_buf, [msg UTF8String]);
+        fflush(g_hooksLogFile);
+    }
+}
+
 #pragma mark - 进程查找与附加
 
 // 通过进程名查找 PID (多个候选名)
@@ -71,7 +96,7 @@ static pid_t find_pid_by_name_multi(const char **names) {
         for (const char **n = names; *n; n++) {
             if (strcasecmp(pname, *n) == 0) {
                 found = procs[i].kp_proc.p_pid;
-                NSLog(@"[Hooks] Found game process: '%s' PID=%d (matched '%s')", pname, found, *n);
+                hooks_log(@"Found game process: '%s' PID=%d (matched '%s')", [NSString stringWithUTF8String:pname], found, [NSString stringWithUTF8String:*n]);
                 free(procs);
                 return found;
             }
@@ -85,7 +110,7 @@ static pid_t find_pid_by_name_multi(const char **names) {
             strcasestr(pname, "tmgp") || strcasestr(pname, "force") ||
             strcasestr(pname, "star")) {
             found = procs[i].kp_proc.p_pid;
-            NSLog(@"[Hooks] Found game process via substring: '%s' PID=%d", pname, found);
+            hooks_log(@"Found game process via substring: '%s' PID=%d", [NSString stringWithUTF8String:pname], found);
             free(procs);
             return found;
         }
@@ -95,11 +120,11 @@ static pid_t find_pid_by_name_multi(const char **names) {
     static BOOL dumpedOnce = NO;
     if (!dumpedOnce) {
         dumpedOnce = YES;
-        NSMutableString *list = [NSMutableString stringWithString:@"[Hooks] All running processes:\n"];
+        hooks_log(@"=== All running processes (first 200) ===");
         for (int i = 0; i < count && i < 200; i++) {
-            [list appendFormat:@"  [%d] %s\n", procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm];
+            hooks_log(@"  [%d] %s", procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm);
         }
-        NSLog(@"%@", list);
+        hooks_log(@"=== End process list ===");
     }
 
     free(procs);
@@ -111,20 +136,20 @@ int hooks_attach_to_game(void) {
 
     pid_t pid = find_pid_by_name_multi(g_game_process_names);
     if (pid < 0) {
-        NSLog(@"[Hooks] Game process not found (is Delta Force running?)");
+        hooks_log(@"Game process not found");
         return -1;
     }
 
     g_gamePid = pid;
     kern_return_t kr = task_for_pid(mach_task_self(), pid, &g_gameTask);
     if (kr != KERN_SUCCESS) {
-        NSLog(@"[Hooks] task_for_pid(%d) failed: %d (need entitlement)", pid, kr);
+        hooks_log(@"task_for_pid(%d) failed: %d (need entitlement)", pid, kr);
         g_gameTask = MACH_PORT_NULL;
         return -2;
     }
 
     g_attached = YES;
-    NSLog(@"[Hooks] Attached to game PID=%d task=%x", pid, g_gameTask);
+    hooks_log(@"Attached to game PID=%d task=%x", pid, g_gameTask);
 
     // 后台扫描游戏基址
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
@@ -142,10 +167,10 @@ int hooks_scan_offsets(void) {
     // 获取游戏基址
     uint64_t gameBase = hooks_get_game_base();
     if (!gameBase) {
-        NSLog(@"[Hooks] Cannot find game base address");
+        hooks_log(@"Cannot find game base address");
         return -1;
     }
-    NSLog(@"[Hooks] Game base: 0x%llx", gameBase);
+    hooks_log(@"Game base: 0x%llx", gameBase);
 
     // 扫描 __TEXT 段获取可执行内存范围
     uint64_t textStart = gameBase;
@@ -176,7 +201,7 @@ int hooks_scan_offsets(void) {
     g_game_offsets.aimbot_angle    = gameBase + 0x0EE4000;
     g_game_offsets.recoil_offset   = 0x2B0;
 
-    NSLog(@"[Hooks] Offsets initialized (base=0x%llx)", gameBase);
+    hooks_log(@" Offsets initialized (base=0x%llx)", gameBase);
     return 0;
 }
 
@@ -418,7 +443,7 @@ NSString *hooks_get_game_path(void) {
     char pathbuf[PROC_PIDPATHINFO_MAXSIZE] = {0};
     int ret = proc_pidpath(g_gamePid, pathbuf, sizeof(pathbuf));
     if (ret <= 0) {
-        NSLog(@"[Hooks] proc_pidpath(%d) failed: %d (%s)", g_gamePid, ret, strerror(errno));
+        hooks_log(@" proc_pidpath(%d) failed: %d (%s)", g_gamePid, ret, strerror(errno));
         return nil;
     }
     // pathbuf = /var/.../DeltaForceClient.app/DeltaForceClient
