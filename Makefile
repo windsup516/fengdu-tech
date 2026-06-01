@@ -49,12 +49,9 @@ Stocks_LDFLAGS = -lz -lobjc -framework UIKit -framework Metal \
 Stocks_CODESIGN_FLAGS = -Ssign.plist
 
 # 嵌入动态库 (libjailbreak.dylib + libchoma.dylib)
-# 使用 _EMBED_LIBRARIES (非 _EMBED_FRAMEWORKS) 因为这是 .dylib 不是 .framework
-# 外部 dylib 已替换为 ExternalStubs.c 本地实现
-# 如需使用原始 dylib, 取消下方注释并注释 ExternalStubs.c
-# Stocks_EMBED_LIBRARIES = \
-# 	Frameworks/libjailbreak.dylib \
-# 	Frameworks/libchoma.dylib
+Stocks_EMBED_LIBRARIES = \
+	Frameworks/libjailbreak.dylib \
+	Frameworks/libchoma.dylib
 
 include $(THEOS_MAKE_PATH)/application.mk
 

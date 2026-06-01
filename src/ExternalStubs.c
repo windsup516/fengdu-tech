@@ -2,6 +2,9 @@
 // 替代 libjailbreak.dylib / libchoma.dylib 的外部依赖
 // TrollStore 安全版本: 不使用任何内核漏洞原语
 // 使用标准 Mach VM API 实现进程间内存读写
+// 所有函数标记为 weak — dylib 版本优先，存根作为 fallback
+
+#define WEAK_STUB __attribute__((weak))
 
 #include "XPFKernelInterface.h"
 #include <mach/mach.h>
@@ -65,7 +68,7 @@ int is_jailbroken(void)  { return detect_environment() == 2; }
 
 // 使用 vm_read_overwrite 从目标 task 读取内存
 // iOS arm64: vm_address_t 是 64 位
-kern_return_t kern_reading(mach_port_t task, uint64_t addr, void *buf, size_t *size) {
+WEAK_STUB kern_return_t kern_reading(mach_port_t task, uint64_t addr, void *buf, size_t *size) {
     if (!buf || !size || *size == 0) return KERN_INVALID_ARGUMENT;
 
     vm_size_t out_size = (vm_size_t)(*size);
@@ -84,7 +87,7 @@ kern_return_t kern_reading(mach_port_t task, uint64_t addr, void *buf, size_t *s
 }
 
 // 使用 vm_write 向目标 task 写入内存
-kern_return_t kern_writing(mach_port_t task, uint64_t addr, void *buf, size_t size) {
+WEAK_STUB kern_return_t kern_writing(mach_port_t task, uint64_t addr, void *buf, size_t size) {
     if (!buf || size == 0) return KERN_INVALID_ARGUMENT;
 
     return vm_write(
@@ -98,7 +101,7 @@ kern_return_t kern_writing(mach_port_t task, uint64_t addr, void *buf, size_t si
 #pragma mark - 越狱初始化 (jb_init)
 
 // 安全版本: 检测环境,不调用危险操作
-int jb_init(void) {
+WEAK_STUB int jb_init(void) {
     int env = detect_environment();
 
     if (env == 2) {
@@ -126,7 +129,7 @@ int jb_init(void) {
 
 #pragma mark - 物理内存操作 (仅越狱可用)
 
-uint64_t physread64(uint64_t phys_addr) {
+WEAK_STUB uint64_t physread64(uint64_t phys_addr) {
     (void)phys_addr;
     if (!is_jailbroken()) return 0;
     // 需要 libjailbreak.dylib 提供真实实现
@@ -134,19 +137,19 @@ uint64_t physread64(uint64_t phys_addr) {
     return 0;
 }
 
-int physwritebuf(uint64_t phys_addr, void *buffer, size_t size) {
+WEAK_STUB int physwritebuf(uint64_t phys_addr, void *buffer, size_t size) {
     (void)phys_addr; (void)buffer; (void)size;
     if (!is_jailbroken()) return -1;
     fprintf(stderr, "[Stubs] physwritebuf: not available (need jailbreak)\n");
     return -1;
 }
 
-uint64_t phystokv(uint64_t phys_addr) {
+WEAK_STUB uint64_t phystokv(uint64_t phys_addr) {
     (void)phys_addr;
     return 0;
 }
 
-uint64_t vtophys(uint64_t virt_addr) {
+WEAK_STUB uint64_t vtophys(uint64_t virt_addr) {
     (void)virt_addr;
     return 0;
 }
@@ -154,7 +157,7 @@ uint64_t vtophys(uint64_t virt_addr) {
 #pragma mark - 内核任务获取 (安全版本)
 
 // 安全获取 kernel_task 端口
-kern_return_t exploit_get_kernel_task(mach_port_t *task) {
+WEAK_STUB kern_return_t exploit_get_kernel_task(mach_port_t *task) {
     if (!task) return KERN_INVALID_ARGUMENT;
     *task = MACH_PORT_NULL;
 
@@ -180,7 +183,7 @@ kern_return_t exploit_get_kernel_task(mach_port_t *task) {
 
 #pragma mark - KASLR 偏移
 
-uint64_t get_kernel_slide(void) {
+WEAK_STUB uint64_t get_kernel_slide(void) {
     if (!is_jailbroken()) return 0;
 
     // 从 sysctl 读取内核基址
@@ -191,14 +194,14 @@ uint64_t get_kernel_slide(void) {
 
 #pragma mark - 线程上下文
 
-uint64_t get_current_thread_context(void) {
+WEAK_STUB uint64_t get_current_thread_context(void) {
     // kcall 需要越狱 + 内核符号
     return 0;
 }
 
 #pragma mark - kcall 设置
 
-void xpf_setup_kcall_primitive(void) {
+WEAK_STUB void xpf_setup_kcall_primitive(void) {
     if (is_jailbroken()) {
         fprintf(stderr, "[Stubs] xpf_setup_kcall_primitive: stub (need libjailbreak)\n");
     }
@@ -206,7 +209,7 @@ void xpf_setup_kcall_primitive(void) {
 
 #pragma mark - 内核进程附加
 
-kern_return_t xpf_attach_kernel_task(uint64_t proc, mach_port_t *task) {
+WEAK_STUB kern_return_t xpf_attach_kernel_task(uint64_t proc, mach_port_t *task) {
     if (!task) return KERN_INVALID_ARGUMENT;
     if (!is_jailbroken()) {
         *task = MACH_PORT_NULL;
@@ -217,7 +220,7 @@ kern_return_t xpf_attach_kernel_task(uint64_t proc, mach_port_t *task) {
 
 #pragma mark - dylib 注入
 
-int xpf_inject_dylib(int pid, const char *dylib_path) {
+WEAK_STUB int xpf_inject_dylib(int pid, const char *dylib_path) {
     fprintf(stderr, "[Stubs] xpf_inject_dylib(%d, %s): not supported without jailbreak\n",
             pid, dylib_path ? dylib_path : "NULL");
     return -1;
@@ -225,7 +228,7 @@ int xpf_inject_dylib(int pid, const char *dylib_path) {
 
 #pragma mark - phystokv / vtophys 补充
 
-uint64_t phystokv_impl(uint64_t phys_addr) {
+WEAK_STUB uint64_t phystokv_impl(uint64_t phys_addr) {
     (void)phys_addr;
     return 0;
 }
