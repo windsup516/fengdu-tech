@@ -223,9 +223,10 @@ void attachWindowToHostingController(UIWindow *window, id hostingController) {
     if (!window || !hostingController) return;
 
     @try {
-        SEL registerSel = NSSelectorFromString(@"registerWindow:contextID:windowLevel:");
+        // 太阳神使用 registerWindowWithContextID:atLevel: 而非 registerWindow:contextID:windowLevel:
+        SEL registerSel = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
         if (![hostingController respondsToSelector:registerSel]) {
-            NSLog(@"[HUD] Hosting controller does not respond to registerWindow:contextID:windowLevel:");
+            NSLog(@"[HUD] Hosting controller does not respond to registerWindowWithContextID:atLevel:");
             return;
         }
 
@@ -237,14 +238,15 @@ void attachWindowToHostingController(UIWindow *window, id hostingController) {
 
         double winLevel = window.windowLevel;
 
-        NSMethodSignature *sig = [NSMethodSignature signatureWithObjCTypes:"v32@0:8@16Q24d28"];
+        // 太阳神使用简化类型编码 v@:Id (void, id, SEL, unsigned int, double)
+        NSMethodSignature *sig = [NSMethodSignature signatureWithObjCTypes:"v@:Id"];
 
         NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
         [inv setTarget:hostingController];
         [inv setSelector:registerSel];
-        [inv setArgument:&window atIndex:2];
-        [inv setArgument:&contextId atIndex:3];
-        [inv setArgument:&winLevel atIndex:4];
+        // 只传 contextID + level，不传 window 对象 (SBS 通过 contextID 识别窗口)
+        [inv setArgument:&contextId atIndex:2];
+        [inv setArgument:&winLevel atIndex:3];
         [inv invoke];
 
         NSLog(@"[HUD] Window registered via NSInvocation: ctx=%u level=%.0f", contextId, winLevel);
