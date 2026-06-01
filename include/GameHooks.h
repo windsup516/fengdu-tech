@@ -5,6 +5,10 @@
 #import <mach/mach.h>
 #import "XPFKernelInterface.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // 游戏钩子 API
 
 extern GameOffsets g_game_offsets;
@@ -33,5 +37,9 @@ uint64_t xpf_scan_game_memory(mach_port_t task, const char *pattern, size_t leng
 mach_port_t hooks_get_game_task(void);
 pid_t hooks_get_game_pid(void);
 BOOL hooks_is_attached(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
