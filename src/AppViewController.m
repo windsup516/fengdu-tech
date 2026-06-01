@@ -13,8 +13,6 @@
 #import <time.h>
 
 @interface AppViewController ()
-@property (nonatomic) BOOL listening;
-@property (nonatomic) BOOL didInstallLayout;
 - (void)installHero;
 @end
 
