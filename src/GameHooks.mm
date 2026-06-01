@@ -100,11 +100,6 @@ static pid_t find_pid_by_name_multi(const char **names) {
     return -1;
 }
 
-static pid_t find_pid_by_name(const char *name) {
-    const char *names[2] = {name, NULL};
-    return find_pid_by_name_multi(names);
-}
-
 int hooks_attach_to_game(void) {
     if (g_attached && g_gameTask != MACH_PORT_NULL) return 0;
 
