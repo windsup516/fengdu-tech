@@ -221,22 +221,25 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
 void attachWindowToHostingController(UIWindow *window, id hostingController) {
     if (!window || !hostingController) return;
 
+    SEL registerSel = NSSelectorFromString(@"registerWindow:contextID:windowLevel:");
+    if (![hostingController respondsToSelector:registerSel]) {
+        NSLog(@"[HUD] Hosting controller does not respond to registerWindow:contextID:windowLevel:");
+        return;
+    }
+
     // 获取窗口的 _contextId (UIScene 上下文 ID)
     unsigned int contextId = 0;
     if ([window respondsToSelector:@selector(_contextId)]) {
         contextId = (unsigned int)[window _contextId];
     }
 
-    // 获取窗口的 windowLevel
     double winLevel = window.windowLevel;
 
-    // 构造方法签名: v32@0:8@16Q24d28
-    // void return, id self, SEL _cmd, id window, uint64 contextId, double windowLevel
     NSMethodSignature *sig = [NSMethodSignature signatureWithObjCTypes:"v32@0:8@16Q24d28"];
 
     NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
     [inv setTarget:hostingController];
-    [inv setSelector:NSSelectorFromString(@"registerWindow:contextID:windowLevel:")];
+    [inv setSelector:registerSel];
     [inv setArgument:&window atIndex:2];
     [inv setArgument:&contextId atIndex:3];
     [inv setArgument:&winLevel atIndex:4];
