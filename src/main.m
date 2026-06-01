@@ -330,6 +330,70 @@ static void install_crash_handlers(void) {
     return NO;
 }
 
+// 探查三角洲行动 App Bundle — 寻找可用于 dylib 注入的目标
+- (void)inspectGameBundle {
+    SAFE_LOG("=== 开始探查 DeltaForceClient.app ===");
+
+    // 遍历 /var/containers/Bundle/Application/ 查找 DeltaForceClient.app
+    NSString *bundleRoot = @"/var/containers/Bundle/Application";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *uuids = [fm contentsOfDirectoryAtPath:bundleRoot error:nil];
+
+    NSString *gamePath = nil;
+    for (NSString *uuid in uuids) {
+        NSString *path = [bundleRoot stringByAppendingPathComponent:uuid];
+        NSArray *apps = [fm contentsOfDirectoryAtPath:path error:nil];
+        for (NSString *app in apps) {
+            if ([app containsString:@"DeltaForce"] || [app containsString:@"dfm"]) {
+                gamePath = [path stringByAppendingPathComponent:app];
+                break;
+            }
+        }
+        if (gamePath) break;
+    }
+
+    if (!gamePath) {
+        SAFE_LOG("未找到 DeltaForceClient.app (路径不存在或无权访问)");
+        // 尝试备用路径
+        gamePath = @"/var/containers/Bundle/Application/*/DeltaForceClient.app";
+        SAFE_LOG("尝试通配符路径: %s", [gamePath UTF8String]);
+    }
+
+    SAFE_LOG("游戏路径: %s", [gamePath UTF8String]);
+
+    if (gamePath && [fm fileExistsAtPath:gamePath]) {
+        // 列出 .app 根目录
+        NSArray *rootFiles = [fm contentsOfDirectoryAtPath:gamePath error:nil];
+        for (NSString *f in rootFiles) {
+            BOOL isDir = NO;
+            NSString *fullPath = [gamePath stringByAppendingPathComponent:f];
+            [fm fileExistsAtPath:fullPath isDirectory:&isDir];
+            unsigned long long size = [[fm attributesOfItemAtPath:fullPath error:nil] fileSize];
+            if (isDir) {
+                SAFE_LOG("  [DIR]  %s/", [f UTF8String]);
+            } else {
+                SAFE_LOG("  [FILE] %s (%llu bytes)", [f UTF8String], size);
+            }
+        }
+
+        // 列出 Frameworks 目录下的 dylib
+        NSString *fwPath = [gamePath stringByAppendingPathComponent:@"Frameworks"];
+        if ([fm fileExistsAtPath:fwPath]) {
+            NSArray *fwFiles = [fm contentsOfDirectoryAtPath:fwPath error:nil];
+            SAFE_LOG("--- Frameworks/ (%lu items) ---", (unsigned long)fwFiles.count);
+            for (NSString *f in fwFiles) {
+                NSString *fullPath = [fwPath stringByAppendingPathComponent:f];
+                unsigned long long size = [[fm attributesOfItemAtPath:fullPath error:nil] fileSize];
+                SAFE_LOG("  %s (%llu bytes)", [f UTF8String], size);
+            }
+        } else {
+            SAFE_LOG("Frameworks/ 目录不存在");
+        }
+    }
+
+    SAFE_LOG("=== 游戏包探查完成 ===");
+}
+
 // 授权成功后直接启动悬浮窗 + 自动打开游戏 + 注入
 - (void)startCheatDirectly {
     if (self.cheatStarted) {
@@ -358,6 +422,11 @@ static void install_crash_handlers(void) {
         [hud show];
         SAFE_LOG("HUD overlay started");
     }
+
+    // 探查游戏包结构 (寻找可替换的 dylib 目标)
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        [self inspectGameBundle];
+    });
 
     // 后台: 先启动游戏, 再注入
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
