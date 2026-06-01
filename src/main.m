@@ -114,11 +114,7 @@ extern uint64_t phystokv(uint64_t phys_addr);
                        options:UIViewAnimationOptionTransitionCrossDissolve
                     completion:^(BOOL finished) {
         self.window.rootViewController = self.appVC;
-
-        // 初始化 HUD 系统 (作弊菜单覆盖层 + 触摸捕获)
-        // 在 TrollStore 环境: 仅使用 userspace overlay (无需内核)
-        // 在越狱环境: 可以使用完整的内核级功能
-        [[HUDController shared] createWindowsOnScene:self.window.windowScene];
+        // HUD 延迟到用户点击 ACTIVATE 后创建，避免登录流程中崩
     }];
 }
 

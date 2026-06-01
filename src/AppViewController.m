@@ -405,16 +405,31 @@
     self.primaryButton.alpha = 0.78;
     [self.spinner startAnimating];
 
-    // 解密状态文字 "Starting..." (对应原版 off_101391310)
     [self setStatus:@"Starting" detail:@"Initializing cheat service..." kind:1];
 
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        // 服务初始化
         HUDController *hud = [HUDController shared];
-        [hud show];
 
-        // 等待游戏附加
+        // 获取当前 window scene (延迟到激活时获取，避免登录流程中崩溃)
+        id scene = nil;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            scene = [UIApplication sharedApplication].delegate.window.windowScene;
+            if (!scene) {
+                scene = [UIApplication sharedApplication].connectedScenes.anyObject;
+            }
+        });
+
+        @try {
+            [hud createWindowsOnScene:scene];
+        } @catch (NSException *e) {
+            NSLog(@"[App] createWindowsOnScene exception: %@", e);
+        }
+
+        if (hud.windowsCreated) {
+            [hud show];
+        }
+
         int attachResult = hooks_attach_to_game();
         if (attachResult == 0) {
             hooks_scan_offsets();

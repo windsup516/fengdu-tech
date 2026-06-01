@@ -93,50 +93,61 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
     if (self.windowsCreated) return;
     self.windowsCreated = YES;
 
-    // 步骤1: 创建 HUD 视图控制器
-    self.rootVC = [[HUDRootViewController alloc] init];
-    self.touchVC = [[TouchViewController alloc] init];
+    @try {
+        // 步骤1: 创建 HUD 视图控制器
+        self.rootVC = [[HUDRootViewController alloc] init];
+        self.touchVC = [[TouchViewController alloc] init];
 
-    // 步骤2: 获取屏幕尺寸
-    UIScreen *screen = [UIScreen mainScreen];
-    CGRect screenBounds = screen.bounds;
+        // 步骤2: 获取屏幕尺寸
+        UIScreen *screen = [UIScreen mainScreen];
+        CGRect screenBounds = screen.bounds;
 
-    // 步骤3: 创建 HUD 窗口 (level 10000010 - 在游戏 UI 之上)
-    // 对应反编译: _initWithFrame:attached: → commonInit
-    self.hudWindow = [[HUDMainWindow alloc] initWithFrame:screenBounds];
-    self.hudWindow.windowScene = scene;
-    self.hudWindow.rootViewController = self.rootVC;
-    self.hudWindow.windowLevel = 10000010.0;
-    self.hudWindow.hidden = NO;
-    [self.hudWindow makeKeyAndVisible];
+        // 步骤3: 创建 HUD 窗口 (level 10000010)
+        self.hudWindow = [[HUDMainWindow alloc] initWithFrame:screenBounds];
+        self.hudWindow.windowScene = scene;
+        self.hudWindow.rootViewController = self.rootVC;
+        self.hudWindow.windowLevel = 10000010.0;
+        self.hudWindow.hidden = NO;
+        [self.hudWindow makeKeyAndVisible];
 
-    // 步骤4: 创建触摸窗口 (level 10000011 - 最高层)
-    self.touchWindow = [[TouchMainWindow alloc] initWithFrame:screenBounds];
-    self.touchWindow.windowScene = scene;
-    self.touchWindow.hudController = self.rootVC;
-    self.touchWindow.rootViewController = self.touchVC;
-    self.touchWindow.windowLevel = 10000011.0;
-    self.touchWindow.hidden = NO;
-    [self.touchWindow makeKeyAndVisible];
+        // 步骤4: 创建触摸窗口 (level 10000011)
+        self.touchWindow = [[TouchMainWindow alloc] initWithFrame:screenBounds];
+        self.touchWindow.windowScene = scene;
+        self.touchWindow.hudController = self.rootVC;
+        self.touchWindow.rootViewController = self.touchVC;
+        self.touchWindow.windowLevel = 10000011.0;
+        self.touchWindow.hidden = NO;
+        [self.touchWindow makeKeyAndVisible];
 
-    // 保存全局引用
-    gTouchWindow = self.touchWindow;
+        gTouchWindow = self.touchWindow;
 
-    // 步骤5: 通过 SBSAccessibilityWindowHostingController 注册 (防检测)
-    [self setupHostingController];
+        // 步骤5: SBS 托管 (可能失败，非致命)
+        @try {
+            [self setupHostingController];
+        } @catch (NSException *e) {
+            NSLog(@"[HUD] Hosting controller setup failed: %@", e);
+        }
 
-    // 步骤6: 初始隐藏 (注册完后再隐藏)
-    self.hudWindow.hidden = YES;
-    self.touchWindow.hidden = YES;
-    self.showing = NO;
+        // 步骤6: 初始隐藏
+        self.hudWindow.hidden = YES;
+        self.touchWindow.hidden = YES;
+        self.showing = NO;
 
-    // 步骤7: 同步方向
-    [self.rootVC syncCurrentOrientation];
+        // 步骤7: 同步方向
+        [self.rootVC syncCurrentOrientation];
 
-    // 步骤8: 注册 HID 事件回调
-    [self registerHIDEventCallback];
+        // 步骤8: HID 回调 (可能失败，非致命)
+        @try {
+            [self registerHIDEventCallback];
+        } @catch (NSException *e) {
+            NSLog(@"[HUD] HID callback registration failed: %@", e);
+        }
 
-    NSLog(@"[HUD] Windows created: hudLevel=10000010 touchLevel=10000011");
+        NSLog(@"[HUD] Windows created: hudLevel=10000010 touchLevel=10000011");
+    } @catch (NSException *e) {
+        NSLog(@"[HUD] createWindowsOnScene FATAL: %@", e);
+        self.windowsCreated = NO;
+    }
 }
 
 - (void)setupHostingController {
