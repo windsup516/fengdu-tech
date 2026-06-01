@@ -402,6 +402,16 @@ static void install_crash_handlers(void) {
     }
 
     // 后台: 先启动游戏, 再注入
+    // 使用 beginBackgroundTask 防止 iOS 挂起扫描线程
+    __block UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
+    bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithName:@"GameLauncher" expirationHandler:^{
+        SAFE_LOG("后台任务即将超时");
+        if (bgTask != UIBackgroundTaskInvalid) {
+            [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+            bgTask = UIBackgroundTaskInvalid;
+        }
+    }];
+
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         // 步骤1: 自动打开三角洲行动 (主线程异步, 避免 openApplication 导致死锁)
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -458,6 +468,13 @@ static void install_crash_handlers(void) {
                 }
             }
         }
+
+        // 清理后台任务
+        if (bgTask != UIBackgroundTaskInvalid) {
+            [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+            bgTask = UIBackgroundTaskInvalid;
+        }
+        SAFE_LOG("后台扫描任务结束");
     });
 
     // 状态提示
