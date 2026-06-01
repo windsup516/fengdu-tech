@@ -48,11 +48,12 @@ Stocks_LDFLAGS = -lz -lobjc -framework UIKit -framework Metal \
 
 Stocks_CODESIGN_FLAGS = -Ssign.plist
 
-# 嵌入动态库 — 越狱专用 (TrollStore 上会闪退，已禁用)
-# 如需越狱版本, 取消注释下面三行并注释 src/ExternalStubs.c
-# Stocks_EMBED_LIBRARIES = \
-# 	Frameworks/libjailbreak.dylib \
-# 	Frameworks/libchoma.dylib
+# 嵌入动态库 — TrollStore + 越狱双模式
+# libjailbreak.dylib: 内核 r/w 原语 (越狱下由 jb_init 激活, TrollStore 自动降级)
+# libchoma.dylib: 代码生成 + Mach-O 解析
+Stocks_EMBED_LIBRARIES = \
+	Frameworks/libjailbreak.dylib \
+	Frameworks/libchoma.dylib
 
 include $(THEOS_MAKE_PATH)/application.mk
 
