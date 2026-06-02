@@ -48,9 +48,15 @@ static kern_return_t game_write(mach_port_t task, uint64_t addr, const void *buf
 static FILE *g_hooksLogFile = NULL;
 static void hooks_log(NSString *fmt, ...) {
     if (!g_hooksLogFile) {
+        NSString *logPath = nil;
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         if (paths.count > 0) {
-            NSString *logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
+            logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
+        }
+        if (!logPath) {
+            logPath = @"/tmp/debug_stocks.log";
+        }
+        if (logPath) {
             g_hooksLogFile = fopen([logPath UTF8String], "a");
         }
     }

@@ -4,7 +4,7 @@
 <dict>
 	<!-- === 核心：task 权限 + 沙盒逃逸 (Amazon2 已验证) === -->
 	<key>get-task-allow</key>
-	<false/>
+	<true/>
 	<key>task_for_pid-allow</key>
 	<true/>
 	<key>platform-application</key>

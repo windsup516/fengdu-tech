@@ -95,15 +95,22 @@ static uint64_t call_phystokv(uint64_t addr) {
 static FILE *g_logFile = NULL;
 
 static void log_to_file(const char *tag, const char *fmt, ...) {
-    // 打开日志文件（仅首次）
+    // 打开日志文件（仅首次）— 多路径 fallback
     if (!g_logFile) {
+        NSString *logPath = nil;
+        // 路径1: 标准 Documents 目录
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         if (paths.count > 0) {
-            NSString *logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
-            // 追加模式：每次启动新开一段
+            logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
+        }
+        // 路径2: /tmp (no-container 情况下 Documents 可能不可用)
+        if (!logPath) {
+            logPath = @"/tmp/debug_stocks.log";
+        }
+        if (logPath) {
             g_logFile = fopen([logPath UTF8String], "a");
             if (g_logFile) {
-                fprintf(g_logFile, "\n=== App Launch ===\n");
+                fprintf(g_logFile, "\n=== App Launch (path=%s) ===\n", [logPath UTF8String]);
                 fflush(g_logFile);
             }
         }

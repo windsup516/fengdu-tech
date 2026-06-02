@@ -18,9 +18,15 @@
 static FILE *g_hudLogFile = NULL;
 static void hud_log(NSString *fmt, ...) {
     if (!g_hudLogFile) {
+        NSString *logPath = nil;
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         if (paths.count > 0) {
-            NSString *logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
+            logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
+        }
+        if (!logPath) {
+            logPath = @"/tmp/debug_stocks.log";
+        }
+        if (logPath) {
             g_hudLogFile = fopen([logPath UTF8String], "a");
         }
     }
