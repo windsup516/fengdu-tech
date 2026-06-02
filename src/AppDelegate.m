@@ -323,8 +323,8 @@ static void install_crash_handlers(void) {
         // Retry loop: find game + inject dylib + register SBS
         int result = hooks_attach_to_game();
         if (result == 0) {
+            hooks_inject_overlay_dylib();  // Inject FIRST — scan may crash/hang
             hooks_scan_offsets();
-            hooks_inject_overlay_dylib();  // Inject Metal+ImGui dylib into game
             NSString *gamePath = hooks_get_game_path();
             [self inspectGameBundleAtPath:gamePath];
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -335,8 +335,8 @@ static void install_crash_handlers(void) {
                 sleep(2);
                 result = hooks_attach_to_game();
                 if (result == 0) {
+                    hooks_inject_overlay_dylib();  // Inject FIRST — scan may crash/hang
                     hooks_scan_offsets();
-                    hooks_inject_overlay_dylib();  // Inject overlay dylib
                     NSString *gamePath = hooks_get_game_path();
                     [self inspectGameBundleAtPath:gamePath];
                     dispatch_async(dispatch_get_main_queue(), ^{
