@@ -375,3 +375,113 @@ NSString *fwDir = [[exeStr stringByDeletingLastPathComponent]
 - `exploit_get_kernel_task()` — 返回 kernel task port（用于 kcall 内存操作）
 
 **通用原则**: 先验证 dylib 导出符号是否完整再追其他问题。`dlopen` 成功 ≠ 符号完整。用 `dlsym` + NULL 检查每个关键函数指针。
+
+---
+
+## 19. GWorld 扫描失败 — vm_region 段检测完全不可靠
+
+**问题**: 日志显示：
+```
+Segments: TEXT=0x100c54000-0x11e3cc000 DATA=0x111030000-0x111038000
+GWorld scan: no high-confidence candidate (best refs=0)
+```
+TEXT 段 480MB（不可能一次 `malloc` + `vm_read_overwrite`），DATA 段只有 0x5000 字节（根本不是真正的数据段），扫描必然失败。
+
+**根因**: `vm_region_64` 遍历 VM 区域时有三个致命缺陷：
+
+1. **TEXT 被无限扩展**: 代码找到第一个可执行区域后，把之后遇到的所有可执行区域都合并进 TEXT 范围。这会把 dyld shared cache（系统库）的地址也吞进去，导致 TEXT 膨胀到几百 MB。
+
+2. **DATA 只取第一个可写区域**: iOS 进程内存布局中，第一个可写非可执行区域通常是 `__AUTH_CONST` 或 `__DATA_CONST`（只有几 KB），真正的 `__DATA`/`__BSS` 在更后面。只取第一个就漏掉了真正的数据段。
+
+3. **单次 `malloc` 整个 TEXT**: 即使 TEXT 只有 200MB，iOS 进程的 malloc 也大概率失败。
+
+**正确的是两种方案**：
+
+### 方案 A: 解析 Mach-O header（推荐，精确快速）
+
+不走 vm_region 遍历，直接读游戏二进制 Mach-O header 里的 `LC_SEGMENT_64` 命令：
+
+```c
+static BOOL find_segments(mach_port_t task, uint64_t gameBase,
+                           uint64_t *text_start, uint64_t *text_end,
+                           uint64_t *data_starts, uint64_t *data_ends,
+                           int *data_count, int max_data) {
+    struct mach_header_64 mh;
+    scan_read(task, gameBase, &mh, sizeof(mh));
+
+    int64_t slide = gameBase - text_seg.vmaddr;  // ASLR slide 对所有段一样
+
+    for (each LC_SEGMENT_64 cmd) {
+        uint64_t seg_start = seg.vmaddr + slide;
+        if (segname == "__TEXT") { text_start, text_end }
+        if (segname == "__DATA" || "__BSS" || "__DATA_CONST"...) {
+            data_starts[i] = seg_start;  // 收集所有数据段
+        }
+    }
+}
+```
+
+**关键点**:
+- `seg.vmaddr` 是编译时地址，运行时地址 = `vmaddr + slide`
+- slide = `gameBase - __TEXT.vmaddr`，一次性算出来，所有段通用
+- `__DATA`、`__BSS`、`__DATA_CONST`、`__DATA_DIRTY`、`__AUTH_CONST` 全部收集，不遗漏
+
+### 方案 B: DATA 段指针扫描（比 ADRP+LDR 更快更可靠）
+
+有了精确的 DATA/BSS 段范围后，直接扫描这些段中存储的指针值，找 UWorld 对象：
+
+```
+遍历 DATA/BSS 中每 8 字节:
+  读 candidate = *(addr)
+  if candidate 不在堆范围 → 跳过
+  读 *(candidate) → vtable_ptr
+  if vtable_ptr 不在 TEXT 段 → 跳过（不是 UObject）
+  读 *(candidate + 0x30) → PersistentLevel
+  if PersistentLevel 不合法 → 跳过
+  读 *(PersistentLevel + 0x98) → Actors数组 + count
+  if count 在 1..5000 范围 → 找到 GWorld！
+```
+
+**为什么比 TEXT ADRP+LDR 扫描好**:
+- DATA/BSS 段通常 20-80MB，远小于 TEXT（200-400MB）
+- 验证链非常强（vtable + PersistentLevel + Actors），几乎不会误报
+- 即使 GWorld 不在 DATA 而在 BSS（零初始化全局变量），也能扫到
+
+### 方案 C: 分块 TEXT ADRP+LDR 扫描（兜底）
+
+如果 DATA 扫描也没找到，对 TEXT 做分块 ADRP+LDR：
+
+```c
+for (chunk_start = text_start; chunk_start < text_end; ) {
+    // 读 64KB
+    vm_read_overwrite(task, chunk_start, 0x10000, buf, &outSize);
+    // 逐指令检查 ADRP + LDR (Rn == Rd)
+    // 解码目标地址，检查是否在 DATA 段
+    // 缓存目标地址做引用计数（相同目标被 3+ 个函数引用 → GWorld）
+    chunk_start += 0x10000 - 8;  // 重叠 8 字节防指令跨块
+}
+```
+
+**关键防护**:
+- **限制扫描范围**: TEXT > 120MB 时只扫前 120MB（引擎代码集中在前面）
+- **最后一帧防死循环**: `chunk <= 8` 时直接 break，不执行 `chunk_start += chunk - 8`
+- **内存泄漏**: goto 跳过早退前先 `free(buf)`
+
+### 三层策略执行顺序
+
+```
+scan_all_offsets()
+  ├─ Step 1: find_segments() Mach-O 解析 — 拿到精确段范围
+  ├─ Step 2: scan_gworld_in_data() — 扫描 DATA/BSS 找 UWorld 指针
+  │    └─ 强验证链: vtable∈TEXT → PersistentLevel → Actors(1..5000)
+  ├─ Step 3: scan_gworld_text_chunked() — 策略 B 失败时跑 ADRP+LDR
+  │    └─ 64KB 分块, 最大 120MB, 局部引用计数 >= 3
+  └─ 全失败 → 返回 -2 → GameHooks 用硬编码偏移兜底
+```
+
+**通用原则**:
+1. **永远不要相信 `vm_region_64` 能给你正确的段范围**。它遍历的是 VM 内核视图，不是 Mach-O 逻辑段。dyld shared cache 的映射、submap 碎片都会让它产生垃圾结果。
+2. **Mach-O header 是事实来源**。游戏二进制就在内存里，直接读 header 解析 `LC_SEGMENT_64` 拿到的是编译器生成的精确段布局。
+3. **单次 `malloc` 整个 TEXT 段必然失败**。iOS 进程内存限制 + 碎片化，超过 100MB 的 malloc 就要用分块读。
+4. **不要只搜一种模式**。ADRP+LDR 只是 UE4 访问全局变量的一种方式，MOVZ+MOVK、ADRP+ADD 也有可能。多策略 fallback 是唯一可靠的方案。
+5. **GWorld 的 DATA 段指针扫描比 TEXT 扫描更优**——数据量小一个数量级，验证条件强，应该作为首选策略。

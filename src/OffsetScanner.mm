@@ -136,121 +136,6 @@ done:
     return result;
 }
 
-#pragma mark - GWorld 签名扫描
-
-// ADRP 指令模式: 寻找被多个函数引用的全局指针 (候选 GWorld)
-// ARM64 常见模式:
-//   ADRP Xn, #page    → 页基址
-//   LDR  Xm, [Xn, #offset] → 加载 GWorld 指针
-
-typedef struct {
-    uint64_t target_addr;   // 解码后的目标地址 (DATA段)
-    uint64_t func_addr;     // 所在函数地址
-    uint8_t  reg_num;       // 目标寄存器
-} AdrpLdrRef;
-
-// 构建 ADRP+LDR 目标地址的字节扫描掩码
-// 模式: ADRP x?, #imm + LDR x?, [x?, #imm]
-// ADRP: 0x?0 0x00 0x00 0x90 (bits 30:29 = immlo)
-// LDR:  0x?8 0x?0 0x40 0xF9 (ldr x?, [x?, #?])
-//
-// 更精确: 扫描 TEXT 段中所有 ADRP+LDR 对, 解码目标地址
-
-uint64_t scan_gworld(mach_port_t task, uint64_t text_start, uint64_t text_end,
-                     uint64_t data_start, uint64_t data_end) {
-    HOOKS_LOG(@"GWorld scan: TEXT 0x%llx-0x%llx DATA 0x%llx-0x%llx",
-              text_start, text_end, data_start, data_end);
-
-    if (text_end <= text_start) return 0;
-
-    size_t textSize = (size_t)(text_end - text_start);
-    uint32_t *textBuf = (uint32_t *)malloc(textSize);
-    if (!textBuf) return 0;
-
-    if (scan_read(task, text_start, textBuf, textSize) != KERN_SUCCESS) {
-        free(textBuf);
-        return 0;
-    }
-
-    size_t instrCount = textSize / 4;
-    uint64_t bestAddr = 0;
-    int bestRefs = 0;
-
-    // 扫描所有 ADRP 指令, 解码目标地址, 统计对 DATA 段的引用
-    for (size_t i = 0; i + 2 < instrCount; i++) {
-        uint32_t instr0 = textBuf[i];     // ADRP
-        uint32_t instr1 = textBuf[i + 1]; // LDR
-
-        // 检查指令1: ADRP
-        if ((instr0 & 0x9F000000) != 0x90000000) continue;
-
-        // 提取 ADRP 目标寄存器
-        uint8_t rd_adrp = instr0 & 0x1F;
-
-        // 检查指令2: LDR (64-bit unsigned offset, Rn == ADRP Rd)
-        uint8_t rn_ldr = (instr1 >> 5) & 0x1F;
-        uint8_t rt_ldr = instr1 & 0x1F;
-
-        // LDR (unsigned offset, 64-bit): 11 111 0 01 01 imm12 Rn Rt
-        if ((instr1 & 0xFFC00000) == 0xF9400000 && rn_ldr == rd_adrp) {
-            uint64_t pc = text_start + i * 4;
-            uint64_t pageBase = arm64_decode_adrp(instr0, pc);
-            uint64_t byteOffset = arm64_decode_ldr_offset(instr1);
-
-            if (pageBase == 0) continue;
-
-            uint64_t targetAddr = pageBase + byteOffset;
-
-            // 只关心指向 DATA 段的引用
-            if (targetAddr >= data_start && targetAddr < data_end) {
-                // 读取目标地址的值 (GWorld 候选)
-                uint64_t pointedValue = 0;
-                if (scan_read_uint64(task, targetAddr, &pointedValue) == KERN_SUCCESS) {
-                    if (pointedValue > 0x100000000 && pointedValue < 0x200000000) {
-                        // 计数引用 (相同目标的引用越多越可能是 GWorld)
-                        int refCount = 1;
-                        for (size_t j = i + 3; j + 1 < instrCount; j++) {
-                            uint32_t ij0 = textBuf[j];
-                            uint32_t ij1 = textBuf[j + 1];
-                            if ((ij0 & 0x9F000000) != 0x90000000) continue;
-                            uint8_t rj = ij0 & 0x1F;
-                            uint8_t nl = (ij1 >> 5) & 0x1F;
-                            if ((ij1 & 0xFFC00000) == 0xF9400000 && nl == rj) {
-                                uint64_t pj = text_start + j * 4;
-                                uint64_t pb = arm64_decode_adrp(ij0, pj);
-                                uint64_t bo = arm64_decode_ldr_offset(ij1);
-                                if (pb && pb + bo == targetAddr) refCount++;
-                            }
-                            // 限制搜索范围, 避免扫描整个 TEXT
-                            if (j > i + 5000) break;
-                        }
-
-                        if (refCount > bestRefs) {
-                            bestRefs = refCount;
-                            bestAddr = targetAddr;
-                            HOOKS_LOG(@"GWorld candidate: *0x%llx=0x%llx refs=%d",
-                                      targetAddr, pointedValue, refCount);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    free(textBuf);
-
-    if (bestAddr && bestRefs >= 3) {
-        uint64_t gworld = 0;
-        scan_read_uint64(task, bestAddr, &gworld);
-        HOOKS_LOG(@"GWorld found: addr=0x%llx value=0x%llx refs=%d",
-                  bestAddr, gworld, bestRefs);
-    } else {
-        HOOKS_LOG(@"GWorld scan: no high-confidence candidate (best refs=%d)", bestRefs);
-    }
-
-    return bestAddr;
-}
-
 #pragma mark - GName XOR 解密
 
 // 红狼 xorString 完整实现 (sub_1000DF968)
@@ -400,47 +285,286 @@ static BOOL is_valid_heap_ptr(uint64_t addr) {
     return addr > 0x100000000 && addr < 0x200000000;
 }
 
-// 扫描 __TEXT 和 __DATA 段
-static BOOL find_segments(mach_port_t task, uint64_t *out_text_start, uint64_t *out_text_end,
-                           uint64_t *out_data_start, uint64_t *out_data_end) {
-    vm_address_t addr = 0;
-    vm_size_t size = 0;
-    mach_msg_type_number_t depth = 1;
-
-    BOOL found_text = NO, found_data = NO;
-
-    while (1) {
-        struct vm_region_submap_info_64 info;
-        mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
-        kern_return_t kr = vm_region_64(task, &addr, &size, VM_REGION_BASIC_INFO_64,
-                                         (vm_region_info_t)&info, &count, &depth);
-        if (kr != KERN_SUCCESS || addr > 0x200000000) break;
-
-        // __TEXT: executable, readable
-        if ((info.protection & VM_PROT_EXECUTE) && (info.protection & VM_PROT_READ)) {
-            if (!found_text) {
-                *out_text_start = addr;
-                *out_text_end = addr + size;
-                found_text = YES;
-            } else {
-                // Extend text region
-                if (addr + size > *out_text_end) *out_text_end = addr + size;
-            }
-        }
-
-        // __DATA: writable, readable
-        if ((info.protection & VM_PROT_WRITE) && !(info.protection & VM_PROT_EXECUTE)) {
-            if (!found_data) {
-                *out_data_start = addr;
-                *out_data_end = addr + size;
-                found_data = YES;
-            }
-        }
-
-        addr += size;
+// 解析 Mach-O header 获取精确的段范围
+// 相比 vm_region 扫描，Mach-O 解析能获得准确的 TEXT/DATA/BSS 边界
+// 避免将 dyld shared cache 区域合并到 TEXT 中
+static BOOL find_segments(mach_port_t task, uint64_t gameBase,
+                           uint64_t *out_text_start, uint64_t *out_text_end,
+                           uint64_t *out_data_starts, uint64_t *out_data_ends,
+                           int *out_data_count, int max_data) {
+    struct mach_header_64 mh;
+    if (scan_read(task, gameBase, &mh, sizeof(mh)) != KERN_SUCCESS) {
+        HOOKS_LOG(@"find_segments: failed to read Mach-O header at 0x%llx", gameBase);
+        return NO;
+    }
+    if (mh.magic != MH_MAGIC_64) {
+        HOOKS_LOG(@"find_segments: bad magic 0x%x (not Mach-O 64)", mh.magic);
+        return NO;
     }
 
-    return found_text && found_data;
+    HOOKS_LOG(@"Mach-O: ncmds=%u sizeofcmds=%u cputype=%u filetype=%u",
+              mh.ncmds, mh.sizeofcmds, mh.cputype, mh.filetype);
+
+    *out_text_start = 0;
+    *out_text_end = 0;
+    *out_data_count = 0;
+    int64_t slide = 0;
+    BOOL has_slide = NO;
+
+    uint64_t cursor = gameBase + sizeof(struct mach_header_64);
+    for (uint32_t i = 0; i < mh.ncmds && cursor < gameBase + sizeof(mh) + mh.sizeofcmds; i++) {
+        struct load_command lc;
+        if (scan_read(task, cursor, &lc, sizeof(lc)) != KERN_SUCCESS) break;
+
+        if (lc.cmd == LC_SEGMENT_64) {
+            struct segment_command_64 seg;
+            if (scan_read(task, cursor, &seg, sizeof(seg)) != KERN_SUCCESS) break;
+
+            // 第一条 TEXT 段的 vmaddr 用于计算 slide
+            if (!has_slide && strcmp(seg.segname, "__TEXT") == 0) {
+                slide = (int64_t)(gameBase - seg.vmaddr);
+                has_slide = YES;
+                HOOKS_LOG(@"ASLR slide: 0x%llx (base=0x%llx vmaddr=0x%llx)",
+                          slide, gameBase, seg.vmaddr);
+            }
+
+            uint64_t seg_start = seg.vmaddr + slide;
+            uint64_t seg_end = seg_start + seg.vmsize;
+
+            if (strcmp(seg.segname, "__TEXT") == 0) {
+                *out_text_start = seg_start;
+                *out_text_end = seg_end;
+                HOOKS_LOG(@"Segment __TEXT: 0x%llx-0x%llx (vmsize=0x%llx fileoff=0x%llx)",
+                          seg_start, seg_end, seg.vmsize, seg.fileoff);
+            } else if (strcmp(seg.segname, "__DATA") == 0 ||
+                       strcmp(seg.segname, "__DATA_CONST") == 0 ||
+                       strcmp(seg.segname, "__DATA_DIRTY") == 0 ||
+                       strcmp(seg.segname, "__AUTH_CONST") == 0 ||
+                       strcmp(seg.segname, "__BSS") == 0) {
+                if (*out_data_count < max_data && seg.vmsize > 0) {
+                    out_data_starts[*out_data_count] = seg_start;
+                    out_data_ends[*out_data_count] = seg_end;
+                    HOOKS_LOG(@"Segment %s: 0x%llx-0x%llx (vmsize=0x%llx)",
+                              seg.segname, seg_start, seg_end, seg.vmsize);
+                    (*out_data_count)++;
+                }
+            }
+        }
+        cursor += lc.cmdsize;
+    }
+
+    if (*out_text_start == 0) {
+        HOOKS_LOG(@"find_segments: __TEXT not found in Mach-O");
+        return NO;
+    }
+
+    HOOKS_LOG(@"Segments: TEXT=0x%llx-0x%llx (%.1fMB) data_regions=%d",
+              *out_text_start, *out_text_end,
+              (*out_text_end - *out_text_start) / 1048576.0, *out_data_count);
+    return YES;
+}
+
+// 扫描 DATA 段寻找 GWorld 全局指针
+// 原理: GWorld 是一个在 DATA/BSS 中的全局变量, 其值指向堆上的 UWorld 对象
+// 遍历 DATA 段中每个 8 字节指针, 验证是否指向有效的 UWorld 结构
+static uint64_t scan_gworld_in_data(mach_port_t task, uint64_t text_start, uint64_t text_end,
+                                     uint64_t *data_starts, uint64_t *data_ends, int data_count) {
+    HOOKS_LOG(@"=== scan_gworld_in_data: checking %d data regions ===", data_count);
+
+    uint64_t best_addr = 0;
+    int best_score = 0;
+
+    for (int d = 0; d < data_count; d++) {
+        uint64_t seg_start = data_starts[d];
+        uint64_t seg_end = data_ends[d];
+        size_t seg_size = (size_t)(seg_end - seg_start);
+
+        if (seg_size < 8 || seg_size > 0x10000000) continue; // skip tiny or huge (>256MB)
+
+        HOOKS_LOG(@"Scanning data region %d: 0x%llx-0x%llx (%.1fMB)",
+                  d, seg_start, seg_end, seg_size / 1048576.0);
+
+        size_t buf_size = 0x10000; // 64KB chunks
+        uint64_t *buf = (uint64_t *)malloc(buf_size);
+        if (!buf) continue;
+
+        for (uint64_t addr = seg_start; addr + 8 <= seg_end; ) {
+            size_t chunk = buf_size;
+            if (addr + chunk > seg_end) chunk = (size_t)(seg_end - addr);
+
+            if (scan_read(task, addr, buf, chunk) != KERN_SUCCESS) {
+                addr += chunk;
+                continue;
+            }
+
+            size_t count = chunk / 8;
+            for (size_t i = 0; i < count; i++) {
+                uint64_t candidate = buf[i];
+                if (!is_valid_heap_ptr(candidate)) continue;
+
+                // 快速验证: 读 UWorld 的 vtable 指针, 必须在 TEXT 段内
+                uint64_t vtable = 0;
+                if (scan_read_uint64(task, candidate, &vtable) != KERN_SUCCESS) continue;
+                if (vtable < text_start || vtable >= text_end) continue;
+
+                // 验证 PersistentLevel (UWorld+0x30)
+                uint64_t plevel = 0;
+                if (scan_read_uint64(task, candidate + 0x30, &plevel) != KERN_SUCCESS) continue;
+                if (!is_valid_heap_ptr(plevel)) continue;
+
+                // 验证 Actors TArray (PersistentLevel+0x98)
+                uint64_t actors_ptr = 0;
+                int32_t actors_count = 0;
+                if (scan_read(task, plevel + 0x98, &actors_ptr, sizeof(uint64_t)) != KERN_SUCCESS) continue;
+                if (scan_read(task, plevel + 0x98 + 8, &actors_count, sizeof(int32_t)) != KERN_SUCCESS) continue;
+
+                if (!actors_ptr || actors_count < 1 || actors_count > 5000) continue;
+                if (!is_valid_heap_ptr(actors_ptr)) continue;
+
+                // 通过所有验证 → 这是 GWorld
+                int score = actors_count; // Actor 数量越多越像正常世界
+                uint64_t gworld_addr = addr + i * 8;
+
+                HOOKS_LOG(@"GWorld candidate: addr=0x%llx -> UWorld=0x%llx (vtable=0x%llx plevel=0x%llx actors=%d)",
+                          gworld_addr, candidate, vtable, plevel, actors_count);
+
+                if (score > best_score) {
+                    best_score = score;
+                    best_addr = gworld_addr;
+                }
+                // 找到第一个高置信度就停止 (actors > 50)
+                if (actors_count > 50) {
+                    free(buf);
+                    goto done;
+                }
+            }
+            addr += chunk - 7 * 8; // overlap to catch cross-chunk pointers
+        }
+
+        free(buf);
+    }
+
+done:
+    if (best_addr) {
+        uint64_t gworld_val = 0;
+        scan_read_uint64(task, best_addr, &gworld_val);
+        HOOKS_LOG(@"GWorld found in DATA: addr=0x%llx -> UWorld=0x%llx score=%d",
+                  best_addr, gworld_val, best_score);
+    } else {
+        HOOKS_LOG(@"GWorld not found in DATA segments");
+    }
+    return best_addr;
+}
+
+// ADRP+LDR 扫描: 在 TEXT 段中搜索 ADRP+LDR 指令对, 解码目标地址
+// 使用分块读取避免 malloc 整个 TEXT 段
+static uint64_t scan_gworld_text_chunked(mach_port_t task, uint64_t text_start, uint64_t text_end,
+                                          uint64_t *data_starts, uint64_t *data_ends, int data_count) {
+    size_t text_size = (size_t)(text_end - text_start);
+    HOOKS_LOG(@"=== scan_gworld_text: 0x%llx-0x%llx (%.1fMB) ===",
+              text_start, text_end, text_size / 1048576.0);
+
+    if (text_size > 0x1E000000) {
+        // TEXT > 480MB 不合理, 可能包含 dyld 区域, 限制扫描前 120MB
+        HOOKS_LOG(@"TEXT too large, limiting scan to first 120MB");
+        text_size = 0x7800000;
+    }
+
+    size_t buf_size = 0x10000; // 64KB = 16384 instructions
+    uint32_t *buf = (uint32_t *)malloc(buf_size);
+    if (!buf) return 0;
+
+    uint64_t best_addr = 0;
+    int best_refs = 0;
+    // 小容量缓存最近 1024 个 ADRP+LDR 目标以减少重复计数扫描
+    #define RECENT_MAX 1024
+    uint64_t recent_addrs[RECENT_MAX] = {0};
+    int recent_refs[RECENT_MAX] = {0};
+    int recent_idx = 0;
+
+    for (uint64_t chunk_start = text_start; chunk_start + 8 <= text_start + text_size; ) {
+        uint64_t remaining = text_start + text_size - chunk_start;
+        size_t chunk = (remaining > buf_size) ? buf_size : (size_t)remaining;
+
+        if (scan_read(task, chunk_start, buf, chunk) != KERN_SUCCESS) {
+            if (remaining <= buf_size) break;
+            chunk_start += chunk - 8;
+            continue;
+        }
+
+        size_t instr_count = chunk / 4;
+        for (size_t i = 0; i + 1 < instr_count; i++) {
+            uint32_t i0 = buf[i];
+            uint32_t i1 = buf[i + 1];
+
+            if ((i0 & 0x9F000000) != 0x90000000) continue; // ADRP check
+            if ((i1 & 0xFFC00000) != 0xF9400000) continue;  // LDR (64-bit unsigned offset) check
+
+            uint8_t rd = i0 & 0x1F;
+            uint8_t rn = (i1 >> 5) & 0x1F;
+            if (rn != rd) continue; // LDR base must match ADRP dest
+
+            uint64_t pc = chunk_start + i * 4;
+            uint64_t page = arm64_decode_adrp(i0, pc);
+            uint64_t off = arm64_decode_ldr_offset(i1);
+            if (!page) continue;
+            uint64_t target = page + off;
+
+            // 检查目标地址是否在任何数据段中
+            BOOL in_data = NO;
+            for (int d = 0; d < data_count; d++) {
+                if (target >= data_starts[d] && target < data_ends[d]) {
+                    in_data = YES;
+                    break;
+                }
+            }
+            if (!in_data) continue;
+
+            // 读取目标处存储的指针值
+            uint64_t pointed = 0;
+            if (scan_read_uint64(task, target, &pointed) != KERN_SUCCESS) continue;
+            if (!is_valid_heap_ptr(pointed)) continue;
+
+            // 检查此 target 是否最近出现过 (局部引用计数)
+            int refs = 1;
+            for (int r = 0; r < RECENT_MAX; r++) {
+                if (recent_addrs[r] == target) {
+                    refs = ++recent_refs[r];
+                    break;
+                }
+            }
+            if (refs == 1) {
+                // 新目标, 加入缓存
+                recent_addrs[recent_idx] = target;
+                recent_refs[recent_idx] = 1;
+                recent_idx = (recent_idx + 1) % RECENT_MAX;
+            }
+
+            if (refs > best_refs) {
+                best_refs = refs;
+                best_addr = target;
+                if (refs >= 5) {
+                    HOOKS_LOG(@"GWorld TEXT hit: *0x%llx=0x%llx refs=%d (pc=0x%llx)",
+                              target, pointed, refs, pc);
+                }
+            }
+        }
+
+        if (remaining <= buf_size) break; // last chunk processed
+        chunk_start += chunk - 8; // overlap 8 bytes for cross-chunk ADRP+LDR
+    }
+
+    free(buf);
+
+    if (best_addr && best_refs >= 3) {
+        uint64_t gv = 0;
+        scan_read_uint64(task, best_addr, &gv);
+        HOOKS_LOG(@"GWorld from TEXT scan: addr=0x%llx -> 0x%llx refs=%d", best_addr, gv, best_refs);
+    } else {
+        HOOKS_LOG(@"GWorld TEXT scan: no candidate with >=3 refs (best=%d)", best_refs);
+    }
+
+    return best_addr;
 }
 
 int scan_all_offsets(mach_port_t task, uint64_t gameBase) {
@@ -448,17 +572,29 @@ int scan_all_offsets(mach_port_t task, uint64_t gameBase) {
 
     HOOKS_LOG(@"=== scan_all_offsets: base=0x%llx ===", gameBase);
 
-    // Step 1: 定位 TEXT / DATA 段
-    uint64_t text_start = 0, text_end = 0, data_start = 0, data_end = 0;
-    if (!find_segments(task, &text_start, &text_end, &data_start, &data_end)) {
-        HOOKS_LOG(@"Failed to find TEXT/DATA segments");
+    // Step 1: 解析 Mach-O 获取精确段范围
+    uint64_t text_start = 0, text_end = 0;
+    uint64_t data_starts[8] = {0};
+    uint64_t data_ends[8] = {0};
+    int data_count = 0;
+
+    if (!find_segments(task, gameBase, &text_start, &text_end,
+                        data_starts, data_ends, &data_count, 8)) {
+        HOOKS_LOG(@"Failed to parse Mach-O segments");
         return -1;
     }
-    HOOKS_LOG(@"Segments: TEXT=0x%llx-0x%llx DATA=0x%llx-0x%llx",
-              text_start, text_end, data_start, data_end);
 
-    // Step 2: 扫描 GWorld
-    uint64_t gworld_ptr_addr = scan_gworld(task, text_start, text_end, data_start, data_end);
+    // Step 2: 策略A — 扫描 DATA 段寻找 UWorld 指针 (最快最可靠)
+    uint64_t gworld_ptr_addr = scan_gworld_in_data(task, text_start, text_end,
+                                                    data_starts, data_ends, data_count);
+
+    // Step 3: 策略B — ADRP+LDR TEXT 扫描 (DATA 扫描失败时的备选)
+    if (!gworld_ptr_addr) {
+        HOOKS_LOG(@"DATA scan failed, trying TEXT ADRP+LDR scan...");
+        gworld_ptr_addr = scan_gworld_text_chunked(task, text_start, text_end,
+                                                    data_starts, data_ends, data_count);
+    }
+
     if (gworld_ptr_addr) {
         g_scanned_offsets.gworld_ptr = gworld_ptr_addr;
         g_scanned_offsets.gworld_found = YES;
@@ -466,25 +602,25 @@ int scan_all_offsets(mach_port_t task, uint64_t gameBase) {
         HOOKS_LOG(@"GWorld scan failed — will use hardcoded offsets as fallback");
     }
 
-    // Step 3: 读取 GWorld 值 (用于验证)
+    // Step 4: 读取 GWorld 值 (用于验证)
     uint64_t gworld = 0;
     if (gworld_ptr_addr) {
         scan_read_uint64(task, gworld_ptr_addr, &gworld);
         HOOKS_LOG(@"GWorld value: 0x%llx (valid=%d)", gworld, is_valid_heap_ptr(gworld));
     }
 
-    // Step 4: 尝试遍历 Actors (验证 UWorld 结构)
+    // Step 5: 验证 UWorld 结构
     if (gworld && is_valid_heap_ptr(gworld)) {
         uint64_t actorsArray = 0;
         int actorsCount = 0;
         if (get_actors_from_world(task, gworld, &actorsArray, &actorsCount) == 0) {
             HOOKS_LOG(@"Actors: array=0x%llx count=%d", actorsArray, actorsCount);
         } else {
-            HOOKS_LOG(@"Failed to read Actors from UWorld — UWorld may be stale");
+            HOOKS_LOG(@"Failed to read Actors from UWorld — may be stale or wrong GWorld");
         }
     }
 
-    // Step 5: 设置已知的 UE4 引擎偏移 (这些很少变化)
+    // Step 6: 设置已知的 UE4 引擎偏移 (这些很少变化)
     g_scanned_offsets.uworld_persistent_level  = 0x30;
     g_scanned_offsets.ulevel_actors            = 0x98;
     g_scanned_offsets.aactor_rootcomponent     = 0x188;
@@ -494,7 +630,7 @@ int scan_all_offsets(mach_port_t task, uint64_t gameBase) {
     g_scanned_offsets.uskinnedmesh_bones       = 0x6F0;
     g_scanned_offsets.uskeletalmesh_componenttoworld = 0x1E0;
 
-    // Step 6: 游戏特定偏移 (硬编码基线, 需每版本验证)
+    // Step 7: 游戏特定偏移 (硬编码基线, 需每版本验证)
     g_scanned_offsets.aactor_health       = 0x120;
     g_scanned_offsets.aactor_max_health   = 0x124;
     g_scanned_offsets.aactor_team_id      = 0xF0;

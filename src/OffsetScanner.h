@@ -47,20 +47,10 @@ uint64_t aob_scan(mach_port_t task, uint64_t start, uint64_t end,
 
 // === GWorld 扫描 ===
 
-// GWorld 候选结果
-typedef struct {
-    uint64_t gworld_ptr_addr;   // GWorld 全局指针的地址 (在 DATA 段)
-    uint64_t gworld_value;      // GWorld 指针指向的 UWorld 对象地址
-    int      ref_count;         // 被引用次数 (引用越多越可靠)
-    uint64_t func_addr;         // 引用 GWorld 的函数地址
-    float    confidence;        // 置信度 0.0-1.0
-} GWorldCandidate;
-
-// 扫描 GWorld 指针
-// 原理: 搜索 ADRP+LDR 指令对, 解码目标地址, 验证是否指向 UWorld 对象
-// 返回 GWorld 全局指针地址 (DATA段), 0=未找到
-uint64_t scan_gworld(mach_port_t task, uint64_t text_start, uint64_t text_end,
-                     uint64_t data_start, uint64_t data_end);
+// GWorld 扫描策略 (内部实现, 由 scan_all_offsets 统一调度):
+//   策略A: 扫描 DATA/BSS 段寻找 UWorld 指针 (验证 PersistentLevel→Actors 链)
+//   策略B: ADRP+LDR 指令对扫描 TEXT 段前 120MB (引用计数>=3 为候选)
+// 两种策略自动 fallback, 结果一致时置信度最高
 
 // === GName 系统 ===
 
