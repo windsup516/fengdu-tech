@@ -29,7 +29,10 @@
 @property (nonatomic, strong) UILabel *brandLabel;
 @property (nonatomic, strong) UILabel *brandSubLabel;
 @property (nonatomic, strong) UIView *heroContainer;
-@property (nonatomic, strong) CAShapeLayer *gridLayer;
+@property (nonatomic, strong) UIView *restorePanel;
+@property (nonatomic, strong) UILabel *gameStateLabel;
+@property (nonatomic, strong) UISwitch *autoInjectSwitch;
+@property (nonatomic, strong) UIButton *restoreButton;
 
 // 状态标志
 @property (nonatomic) BOOL hudVisible;
@@ -57,6 +60,10 @@
 - (void)toggleHUD;
 - (void)updatePrimaryButtonAppearance;
 - (void)startServiceBootstrap;
+- (void)installRestorePanel;
+- (void)refreshGameState;
+- (void)restoreAndCleanTapped;
+- (void)autoInjectToggled:(UISwitch *)sender;
 - (void)prepareForEntryAnimation;
 - (void)runEntryAnimationIfNeeded;
 - (UIView *)addGlowBlobAtAnchor:(CGPoint)anchor tint:(UIColor *)tint size:(CGFloat)size;

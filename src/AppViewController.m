@@ -54,6 +54,9 @@
     @try { [self installFooter]; NSLog(@"[AppVC] installFooter OK"); }
     @catch (NSException *e) { NSLog(@"[AppVC] installFooter CRASH: %@", e); }
 
+    @try { [self installRestorePanel]; NSLog(@"[AppVC] installRestorePanel OK"); }
+    @catch (NSException *e) { NSLog(@"[AppVC] installRestorePanel CRASH: %@", e); }
+
     self.listening = YES;
 
     @try {
@@ -120,9 +123,9 @@
                           @"M16A4", @"M4A1", @"K416", @"AUG", @"M7", @"SC17", @"97M"];
 
     NSMutableArray *buttons = [NSMutableArray array];
-    CGFloat btnWidth = 72;
-    CGFloat btnHeight = 34;
-    CGFloat spacing = 8;
+    CGFloat btnWidth = 62;
+    CGFloat btnHeight = 30;
+    CGFloat spacing = 6;
     CGFloat totalWidth = weapons.count * btnWidth + (weapons.count - 1) * spacing;
 
     UIScrollView *scrollView = [[UIScrollView alloc] init];
@@ -137,7 +140,7 @@
     [weapons enumerateObjectsUsingBlock:^(NSString *name, NSUInteger idx, BOOL *stop) {
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
         [btn setTitle:name forState:UIControlStateNormal];
-        btn.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+        btn.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
         btn.tintColor = [UIColor whiteColor];
         btn.backgroundColor = [UIColor colorWithRed:0.118 green:0.149 blue:0.235 alpha:1.0];
         btn.layer.cornerRadius = 8;
@@ -238,8 +241,8 @@
 
     [NSLayoutConstraint activateConstraints:@[
         [self.infoCard.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
-        [self.infoCard.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:80],
-        [self.infoCard.widthAnchor constraintEqualToConstant:160],
+        [self.infoCard.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:110],
+        [self.infoCard.widthAnchor constraintEqualToConstant:150],
 
         [self.infoCardHeader.topAnchor constraintEqualToAnchor:self.infoCard.topAnchor constant:12],
         [self.infoCardHeader.leadingAnchor constraintEqualToAnchor:self.infoCard.leadingAnchor constant:12],
@@ -415,6 +418,144 @@
 
     // 更新按钮文字和颜色
     [self updatePrimaryButtonAppearance];
+}
+
+#pragma mark - Restore / Clean Panel
+
+- (void)installRestorePanel {
+    UIView *panel = [[UIView alloc] init];
+    panel.backgroundColor = [UIColor colorWithRed:0.078 green:0.094 blue:0.157 alpha:0.5];
+    panel.layer.cornerRadius = 12;
+    panel.layer.borderWidth = 1;
+    panel.layer.borderColor = [UIColor colorWithRed:0.157 green:0.188 blue:0.282 alpha:1.0].CGColor;
+    panel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:panel];
+    self.restorePanel = panel;
+
+    UILabel *title = [[UILabel alloc] init];
+    title.text = @"GAME STATE";
+    title.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
+    title.textColor = [UIColor colorWithRed:0.588 green:0.659 blue:0.784 alpha:1.0];
+    title.translatesAutoresizingMaskIntoConstraints = NO;
+    [panel addSubview:title];
+
+    self.gameStateLabel = [[UILabel alloc] init];
+    self.gameStateLabel.text = @"等待游戏...";
+    self.gameStateLabel.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
+    self.gameStateLabel.textColor = [UIColor colorWithRed:0.376 green:0.647 blue:0.980 alpha:1.0];
+    self.gameStateLabel.numberOfLines = 2;
+    self.gameStateLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [panel addSubview:self.gameStateLabel];
+
+    // Auto-inject toggle
+    self.autoInjectSwitch = [[UISwitch alloc] init];
+    self.autoInjectSwitch.onTintColor = [UIColor colorWithRed:0.376 green:0.647 blue:0.980 alpha:1.0];
+    self.autoInjectSwitch.on = ![[NSUserDefaults standardUserDefaults] boolForKey:@"auto_inject_disabled"];
+    [self.autoInjectSwitch addTarget:self action:@selector(autoInjectToggled:) forControlEvents:UIControlEventValueChanged];
+    self.autoInjectSwitch.transform = CGAffineTransformMakeScale(0.7, 0.7);
+    self.autoInjectSwitch.translatesAutoresizingMaskIntoConstraints = NO;
+    [panel addSubview:self.autoInjectSwitch];
+
+    UILabel *toggleLabel = [[UILabel alloc] init];
+    toggleLabel.text = @"自动注入";
+    toggleLabel.font = [UIFont systemFontOfSize:9];
+    toggleLabel.textColor = [UIColor colorWithRed:0.588 green:0.659 blue:0.784 alpha:1.0];
+    toggleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [panel addSubview:toggleLabel];
+
+    // Restore button
+    UIButton *restoreBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [restoreBtn setTitle:@"还原清理" forState:UIControlStateNormal];
+    restoreBtn.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
+    restoreBtn.tintColor = [UIColor colorWithRed:0.973 green:0.443 blue:0.443 alpha:1.0];
+    restoreBtn.backgroundColor = [UIColor colorWithRed:0.973 green:0.443 blue:0.443 alpha:0.15];
+    restoreBtn.layer.cornerRadius = 6;
+    restoreBtn.layer.borderWidth = 1;
+    restoreBtn.layer.borderColor = [UIColor colorWithRed:0.973 green:0.443 blue:0.443 alpha:0.4].CGColor;
+    [restoreBtn addTarget:self action:@selector(restoreAndCleanTapped) forControlEvents:UIControlEventTouchUpInside];
+    restoreBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    [panel addSubview:restoreBtn];
+    self.restoreButton = restoreBtn;
+
+    [NSLayoutConstraint activateConstraints:@[
+        [panel.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:16],
+        [panel.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-16],
+        [panel.bottomAnchor constraintEqualToAnchor:self.footerLabel.topAnchor constant:-12],
+        [panel.heightAnchor constraintEqualToConstant:52],
+
+        [title.topAnchor constraintEqualToAnchor:panel.topAnchor constant:6],
+        [title.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:10],
+
+        [self.gameStateLabel.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:2],
+        [self.gameStateLabel.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:10],
+        [self.gameStateLabel.trailingAnchor constraintEqualToAnchor:panel.centerXAnchor constant:-4],
+
+        [self.autoInjectSwitch.centerYAnchor constraintEqualToAnchor:panel.centerYAnchor],
+        [self.autoInjectSwitch.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-8],
+        [toggleLabel.centerYAnchor constraintEqualToAnchor:self.autoInjectSwitch.centerYAnchor],
+        [toggleLabel.trailingAnchor constraintEqualToAnchor:self.autoInjectSwitch.leadingAnchor constant:-2],
+
+        [restoreBtn.centerYAnchor constraintEqualToAnchor:panel.centerYAnchor],
+        [restoreBtn.trailingAnchor constraintEqualToAnchor:toggleLabel.leadingAnchor constant:-8],
+        [restoreBtn.widthAnchor constraintEqualToConstant:70],
+        [restoreBtn.heightAnchor constraintEqualToConstant:24],
+    ]];
+
+    [self refreshGameState];
+}
+
+- (void)refreshGameState {
+    pid_t pid = hooks_get_game_pid();
+    BOOL attached = hooks_is_attached();
+    BOOL injectDisabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"auto_inject_disabled"];
+
+    if (pid > 0 && attached) {
+        self.gameStateLabel.text = [NSString stringWithFormat:@"PID:%d 已附加", pid];
+        self.gameStateLabel.textColor = [UIColor colorWithRed:0.204 green:0.827 blue:0.600 alpha:1.0];
+    } else if (pid > 0) {
+        self.gameStateLabel.text = [NSString stringWithFormat:@"PID:%d 断开", pid];
+        self.gameStateLabel.textColor = [UIColor colorWithRed:0.973 green:0.443 blue:0.443 alpha:1.0];
+    } else {
+        self.gameStateLabel.text = injectDisabled ? @"注入已关闭" : @"等待游戏启动...";
+        self.gameStateLabel.textColor = [UIColor colorWithRed:0.588 green:0.659 blue:0.784 alpha:1.0];
+    }
+    self.restoreButton.enabled = (pid > 0);
+    self.restoreButton.alpha = (pid > 0) ? 1.0 : 0.4;
+}
+
+- (void)autoInjectToggled:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:!sender.on forKey:@"auto_inject_disabled"];
+    [self refreshGameState];
+}
+
+- (void)restoreAndCleanTapped {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"还原清理"
+        message:@"还原所有内存补丁并结束游戏进程？\n下次启动将不再自动注入。"
+        preferredStyle:UIAlertControllerStyleAlert];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"确认还原" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        // 1. Restore all memory patches
+        hooks_restore_all_patches();
+
+        // 2. Kill game process (unloads dylib from memory)
+        pid_t pid = hooks_get_game_pid();
+        if (pid > 0) {
+            kill(pid, SIGKILL);
+        }
+
+        // 3. Clean /tmp/ logs
+        remove("/tmp/dfoverlay.log");
+
+        // 4. Disable auto-inject for next launch
+        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"auto_inject_disabled"];
+        self.autoInjectSwitch.on = NO;
+
+        [self setStatus:@"已清理" detail:@"游戏已结束，补丁已还原" kind:0];
+        [self refreshGameState];
+    }]];
+
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)updatePrimaryButtonAppearance {
@@ -622,18 +763,17 @@
 }
 
 - (void)installHero {
-    // "风度" 品牌标题
     self.brandLabel = [[UILabel alloc] init];
     self.brandLabel.text = @"风度全功能";
-    self.brandLabel.font = [UIFont systemFontOfSize:32 weight:UIFontWeightBold];
+    self.brandLabel.font = [UIFont systemFontOfSize:26 weight:UIFontWeightBold];
     self.brandLabel.textColor = [UIColor whiteColor];
     self.brandLabel.textAlignment = NSTextAlignmentCenter;
     self.brandLabel.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.brandLabel];
 
     self.brandSubLabel = [[UILabel alloc] init];
-    self.brandSubLabel.text = @"专业三角洲行动辅助工具";
-    self.brandSubLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+    self.brandSubLabel.text = @"三角洲行动辅助";
+    self.brandSubLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
     self.brandSubLabel.textColor = [UIColor colorWithRed:0.588 green:0.659 blue:0.784 alpha:0.8];
     self.brandSubLabel.textAlignment = NSTextAlignmentCenter;
     self.brandSubLabel.translatesAutoresizingMaskIntoConstraints = NO;
@@ -641,9 +781,9 @@
 
     [NSLayoutConstraint activateConstraints:@[
         [self.brandLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [self.brandLabel.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:40],
+        [self.brandLabel.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:30],
         [self.brandSubLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [self.brandSubLabel.topAnchor constraintEqualToAnchor:self.brandLabel.bottomAnchor constant:4],
+        [self.brandSubLabel.topAnchor constraintEqualToAnchor:self.brandLabel.bottomAnchor constant:2],
     ]];
 }
 

@@ -293,6 +293,11 @@ int hooks_inject_overlay_dylib(void) {
         return -1;
     }
 
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"auto_inject_disabled"]) {
+        HOOKS_LOG(@">> Auto-inject DISABLED by user — skipping");
+        return 0;
+    }
+
     HOOKS_LOG(@"========================================");
     HOOKS_LOG(@">> INJECTING DFOverlay.dylib -> PID %d <<", g_gamePid);
     HOOKS_LOG(@"========================================");
@@ -890,7 +895,7 @@ int hooks_patch_recoil(BOOL enable) {
         if (!addr) return -1;
 
         size_t sz = sizeof(g_origRecoilCode);
-        game_read(g_gameTask, addr, &g_origRecoilCode, sz);
+        if (!g_origRecoilCode) game_read(g_gameTask, addr, &g_origRecoilCode, sz);
 
         uint32_t nop = 0xD503201F; // ARM64 NOP
         g_recoilAddr = addr;
@@ -914,7 +919,7 @@ int hooks_patch_no_spread(BOOL enable) {
             g_spreadAddr = found + 4;
         }
         size_t sz = sizeof(g_origSpreadCode);
-        game_read(g_gameTask, g_spreadAddr, &g_origSpreadCode, sz);
+        if (!g_origSpreadCode) game_read(g_gameTask, g_spreadAddr, &g_origSpreadCode, sz);
         uint32_t nop = 0xD503201F;
         return game_write(g_gameTask, g_spreadAddr, &nop, sizeof(uint32_t)) == KERN_SUCCESS ? 0 : -1;
     } else {
@@ -924,6 +929,25 @@ int hooks_patch_no_spread(BOOL enable) {
         }
         return 0;
     }
+}
+
+// === Restore all patches (clean exit) ===
+int hooks_restore_all_patches(void) {
+    int restored = 0;
+    if (g_recoilAddr && g_origRecoilCode) {
+        game_write(g_gameTask, g_recoilAddr, &g_origRecoilCode, sizeof(uint32_t));
+        g_recoilAddr = 0;
+        g_origRecoilCode = 0;
+        restored++;
+    }
+    if (g_spreadAddr && g_origSpreadCode) {
+        game_write(g_gameTask, g_spreadAddr, &g_origSpreadCode, sizeof(uint32_t));
+        g_spreadAddr = 0;
+        g_origSpreadCode = 0;
+        restored++;
+    }
+    HOOKS_LOG(@"Restored %d patches", restored);
+    return restored;
 }
 
 int hooks_patch_weapon_recoil(BOOL enable, const char *weapon_name) {
