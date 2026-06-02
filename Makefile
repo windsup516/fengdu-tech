@@ -50,7 +50,6 @@ Stocks_LDFLAGS = -lz -lobjc -framework UIKit -framework Metal \
 # sign.plist 包含 task_for_pid-allow 等 TrollStore 专用权限
 _THEOS_TARGET_CODESIGNING_TOOL = ldid
 Stocks_CODESIGN_FLAGS = -Ssign.plist
-ADDITIONAL_CODESIGN_FLAGS = -Ssign.plist
 
 # 嵌入动态库 — TrollStore + 越狱双模式
 # libjailbreak.dylib: 内核 r/w 原语 (越狱下由 jb_init 激活, TrollStore 自动降级)
@@ -74,14 +73,37 @@ after-package::
 	@if [ -d Base.lproj ]; then cp -r Base.lproj /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@if [ -d Frameworks ]; then cp -r Frameworks /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@if [ -d Resources ]; then cp -r Resources/* /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
-	@# ★ 关键: 用 Theos 自带的 ldid 重签，确保 entitlements 嵌入
-	@echo "==> Re-signing with entitlements..."
-	@THEOS_LDID=$$(ls $(THEOS)/bin/ldid* 2>/dev/null | head -1); \
-	if [ -z "$$THEOS_LDID" ]; then THEOS_LDID=ldid; fi; \
-	$$THEOS_LDID -Ssign.plist -M /tmp/Stocks.tipa.work/Payload/Stocks.app/Stocks 2>&1; \
-	echo "=== Embedded entitlements check ==="; \
-	$$THEOS_LDID -e /tmp/Stocks.tipa.work/Payload/Stocks.app/Stocks 2>/dev/null | grep -E "task_for_pid|get-task|system-task" || echo "FATAL: key entitlements not embedded!"; \
-	echo "=== Entitlement check done ==="
+	@# === 显式重签：不依赖 Theos 内部签名，全部在这里完成 ===
+	@echo "==> Re-signing with entitlements (ldid2)..."; \
+	LDID=$$(ls $(THEOS)/bin/ldid* 2>/dev/null | head -1); \
+	if [ -z "$$LDID" ] || [ ! -x "$$LDID" ]; then \
+		LDID=$$(which ldid 2>/dev/null); \
+	fi; \
+	if [ -z "$$LDID" ] || [ ! -x "$$LDID" ]; then \
+		echo "FATAL: ldid not found!"; exit 1; \
+	fi; \
+	echo "Using ldid: $$LDID"; \
+	APP_BIN=/tmp/Stocks.tipa.work/Payload/Stocks.app/Stocks; \
+	echo "=== Entitlements before re-sign ==="; \
+	$$LDID -e "$$APP_BIN" 2>&1 || echo "(none)"; \
+	echo "=== Stripping old signature ==="; \
+	codesign --remove-signature "$$APP_BIN" 2>/dev/null || true; \
+	echo "=== Signing with $(CURDIR)/sign.plist ==="; \
+	$$LDID -S$(CURDIR)/sign.plist "$$APP_BIN" 2>&1 || { echo "FATAL: ldid signing failed!"; exit 1; }; \
+	echo "=== Entitlements after re-sign ==="; \
+	ENTS=$$($$LDID -e "$$APP_BIN" 2>&1); \
+	echo "$$ENTS"; \
+	if ! echo "$$ENTS" | grep -q "task_for_pid-allow"; then \
+		echo "FATAL: task_for_pid-allow NOT embedded in final binary!"; exit 1; \
+	fi; \
+	echo "=== Signing embedded dylibs ==="; \
+	for dylib in /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/*.dylib; do \
+		if [ -f "$$dylib" ]; then \
+			echo "  Signing: $$dylib"; \
+			$$LDID -S$(CURDIR)/sign.plist "$$dylib" 2>&1 || true; \
+		fi; \
+	done; \
+	echo "=== Signing complete, entitlements OK ==="
 	@cd /tmp/Stocks.tipa.work && rm -f Stocks.tipa && zip -r Stocks.tipa Payload/ >/dev/null 2>&1
 	@mkdir -p $(THEOS_PACKAGE_DIR)
 	@cp /tmp/Stocks.tipa.work/Stocks.tipa $(THEOS_PACKAGE_DIR)/Stocks.tipa

@@ -77,12 +77,12 @@ jobs:
 
       - name: Verify entitlements embedded in binary
         run: |
-          set +e  # 禁用 errexit，防止 unzip/ldid 失败时直接退出
+          set +e
           echo "=== Checking embedded entitlements ==="
-          TIPA_PATH="packages/Stocks.tipa"
+          TIPA_PATH="${{ github.workspace }}/packages/Stocks.tipa"
           if [ ! -f "$TIPA_PATH" ]; then
             echo "ERROR: $TIPA_PATH not found!"
-            ls -la packages/ 2>/dev/null || echo "packages/ dir missing"
+            ls -la "${{ github.workspace }}/packages/" 2>/dev/null || echo "packages/ dir missing"
             exit 0
           fi
           THEOS_LDID=$(ls /tmp/theos/bin/ldid* 2>/dev/null | head -1)
@@ -90,10 +90,16 @@ jobs:
           echo "Using ldid: $THEOS_LDID"
           mkdir -p /tmp/verify_ent
           cd /tmp/verify_ent
-          unzip -o "../$TIPA_PATH" Payload/Stocks.app/Stocks 2>&1 || { echo "unzip failed"; exit 0; }
+          unzip -o "$TIPA_PATH" Payload/Stocks.app/Stocks 2>&1 || { echo "unzip failed"; exit 0; }
           echo "Entitlements in Stocks binary:"
           if [ -x "$THEOS_LDID" ]; then
-            "$THEOS_LDID" -e Payload/Stocks.app/Stocks 2>&1
+            ENTS=$("$THEOS_LDID" -e Payload/Stocks.app/Stocks 2>&1)
+            echo "$ENTS"
+            if ! echo "$ENTS" | grep -q "task_for_pid-allow"; then
+              echo "FATAL: task_for_pid-allow NOT in final tipa binary!"
+            else
+              echo "OK: task_for_pid-allow confirmed in tipa"
+            fi
           else
             echo "ldid not executable, trying codesign..."
             codesign -d --entitlements :- Payload/Stocks.app/Stocks 2>&1 || echo "Neither ldid nor codesign available"
