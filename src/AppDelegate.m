@@ -11,6 +11,7 @@
 #import "InternalAntiCheat.h"
 #import "Logging.h"
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <dlfcn.h>
 #import <spawn.h>
 #import <sys/sysctl.h>
@@ -38,14 +39,6 @@ static uint64_t (*real_physread64)(uint64_t) = NULL;
 static int (*real_physwritebuf)(uint64_t, void*, size_t) = NULL;
 static uint64_t (*real_phystokv)(uint64_t) = NULL;
 static int (*real_xpf_inject_dylib)(int, const char*) = NULL;
-
-// Dylib globals (defined in ExternalStubs.c)
-extern void *dylib_kern_reading;
-extern void *dylib_kern_writing;
-extern void *dylib_kcall;
-extern void *dylib_kalloc;
-extern void *dylib_physread64;
-extern void *dylib_physwritebuf;
 
 static void resolve_dylib_functions(void) {
     char exePath[1024];
