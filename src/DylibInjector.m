@@ -20,6 +20,7 @@ extern kern_return_t mach_vm_protect(task_t task, mach_vm_address_t addr,
 // arm_thread_state64_t and ARM_THREAD_STATE64_COUNT are from <mach/arm/thread_status.h>
 
 // === Core injection: allocate + write + create remote thread ===
+// dylibPath MUST be a path accessible to the remote process (e.g., /tmp/xxx)
 static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     task_t remoteTask = MACH_PORT_NULL;
     kern_return_t kr;
@@ -63,37 +64,33 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     }
 
     // Step 5: Build ARM64 shellcode at remoteBase + pathLen + 0x1000
-    // Align to page boundary
     uint64_t codeAddr = (remoteBase + 0x2000) & ~0xFFFULL;
-    uint64_t stackAddr = codeAddr + 0x2000; // stack grows down
+    uint64_t stackAddr = codeAddr + 0x2000;
 
-    // ARM64 assembly to call dlopen(path, RTLD_NOW):
-    //   sub sp, sp, #16
-    //   stp x29, x30, [sp]
-    //   add x29, sp, #0
-    //   mov x0, #<path_lo>
-    //   movk x0, #<path_hi16>, lsl #16
-    //   movk x0, #<path_hi32>, lsl #32
-    //   movk x0, #<path_hi48>, lsl #48
-    //   mov x1, #2                    // RTLD_NOW
-    //   mov x16, #<dlopen_lo>
-    //   movk x16, #<dlopen_hi16>, lsl #16
-    //   movk x16, #<dlopen_hi32>, lsl #32
-    //   movk x16, #<dlopen_hi48>, lsl #48
-    //   blr x16
-    //   ldp x29, x30, [sp]
-    //   add sp, sp, #16
+    // ARM64 assembly:
+    //   sub sp, sp, #32
+    //   stp x29, x30, [sp, #16]
+    //   add x29, sp, #16
+    //   movz x0, #<path_lo> ; movk x0, #...   // path arg
+    //   movz x1, #9                            // RTLD_LAZY | RTLD_GLOBAL
+    //   movz x16, #<dlopen_lo> ; movk x16, #...
+    //   blr x16                                // dlopen(path, RTLD_LAZY|RTLD_GLOBAL)
+    //   cbz x0, .Lexit                         // if NULL, skip constructor call
+    //   ldp x29, x30, [sp, #16]
+    //   add sp, sp, #32
+    // .Lexit:
     //   mov x0, #0
-    //   brk #0                        // trap to exit thread
+    //   mov x16, #1                            // SYS_exit
+    //   svc #0x80                              // thread exit (no crash)
 
-    uint32_t shellcode[32];
+    uint32_t shellcode[40];
     int ci = 0;
     uint64_t path = remoteBase;
     uint64_t fn = (uint64_t)dlopenPtr;
 
-    shellcode[ci++] = 0xD10043FF; // sub sp, sp, #16
-    shellcode[ci++] = 0xA9007BFD; // stp x29, x30, [sp]
-    shellcode[ci++] = 0x910003FD; // add x29, sp, #0
+    shellcode[ci++] = 0xD10083FF; // sub sp, sp, #32
+    shellcode[ci++] = 0xA9017BFD; // stp x29, x30, [sp, #16]
+    shellcode[ci++] = 0x910043FD; // add x29, sp, #16
 
     // movz/movk x0 with path address
     shellcode[ci++] = 0xD2800000 | ((path & 0xFFFF) << 5);
@@ -101,20 +98,27 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     shellcode[ci++] = 0xF2C00000 | (((path >> 32) & 0xFFFF) << 5);
     shellcode[ci++] = 0xF2E00000 | (((path >> 48) & 0xFFFF) << 5);
 
-    // RTLD_NOW = 2 (prefer NOW so constructor runs immediately)
-    shellcode[ci++] = 0xD2800041; // mov x1, #2
+    // x1 = RTLD_LAZY(1) | RTLD_GLOBAL(8) = 9
+    shellcode[ci++] = 0xD2800121; // mov x1, #9
 
-    // movz/movk x16 with dlopen address, then blr
+    // movz/movk x16 with dlopen address
     shellcode[ci++] = 0xD2800000 | ((fn & 0xFFFF) << 5) | 0x10;
     shellcode[ci++] = 0xF2A00000 | (((fn >> 16) & 0xFFFF) << 5) | 0x10;
     shellcode[ci++] = 0xF2C00000 | (((fn >> 32) & 0xFFFF) << 5) | 0x10;
     shellcode[ci++] = 0xF2E00000 | (((fn >> 48) & 0xFFFF) << 5) | 0x10;
-    shellcode[ci++] = 0xD63F0200; // blr x16
 
-    shellcode[ci++] = 0xA9407BFD; // ldp x29, x30, [sp]
-    shellcode[ci++] = 0x910043FF; // add sp, sp, #16
+    shellcode[ci++] = 0xD63F0200; // blr x16
+    // x0 now = dlopen() return value (handle or NULL)
+
+    shellcode[ci++] = 0xB4000040; // cbz x0, skip_cleanup (skip stack restore if NULL)
+    shellcode[ci++] = 0xA9417BFD; // ldp x29, x30, [sp, #16]
+    shellcode[ci++] = 0x910083FF; // add sp, sp, #32
+
+    // skip_cleanup: thread exit via SYS_exit (no crash even if dlopen failed)
     shellcode[ci++] = 0xD2800000; // mov x0, #0
-    shellcode[ci++] = 0xD4200000; // brk #0
+    shellcode[ci++] = 0xD2800021; // mov x1, #1 (= SYS_exit on iOS/arm64)
+    shellcode[ci++] = 0xD2800010; // mov x16, #1
+    shellcode[ci++] = 0xD4000801; // svc #0x80
 
     size_t codeSize = ci * sizeof(uint32_t);
 
@@ -141,7 +145,7 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     state.__fp = 0;
     state.__lr = 0;
     state.__x[0] = path;
-    state.__x[1] = 2; // RTLD_NOW
+    state.__x[1] = 9; // RTLD_LAZY | RTLD_GLOBAL
     state.__cpsr = 0;
 
     thread_act_t remoteThread = MACH_PORT_NULL;
@@ -168,7 +172,7 @@ cleanup:
 int inject_dylib_to_pid(pid_t pid, const char *dylibName) {
     SAFE_LOG(@">> inject_dylib_to_pid: %s -> PID %d", dylibName, pid);
 
-    // Resolve dylib path
+    // Resolve dylib path inside Stocks bundle
     NSString *fwPath = [[[NSBundle mainBundle] bundlePath]
         stringByAppendingPathComponent:[NSString stringWithFormat:@"Frameworks/%s", dylibName]];
 
@@ -182,8 +186,19 @@ int inject_dylib_to_pid(pid_t pid, const char *dylibName) {
         return -1;
     }
 
-    const char *path = [fwPath UTF8String];
-    SAFE_LOG(@">> dylib path: %s", path);
+    SAFE_LOG(@">> dylib source: %s", [fwPath UTF8String]);
+
+    // Copy to /tmp/ so game process can read it (iOS sandbox prevents cross-app bundle access)
+    NSString *tmpPath = [NSString stringWithFormat:@"/tmp/%s", dylibName];
+    NSError *copyErr = nil;
+    [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil];
+    if (![[NSFileManager defaultManager] copyItemAtPath:fwPath toPath:tmpPath error:&copyErr]) {
+        SAFE_LOG(@">> INJECT FAIL: copy to /tmp/ failed: %s", [[copyErr description] UTF8String]);
+        return -1;
+    }
+    SAFE_LOG(@">> dylib copied to: %s", [tmpPath UTF8String]);
+
+    const char *path = [tmpPath UTF8String];
 
     // Method 1: Try xpf_inject_dylib from libjailbreak
     typedef int (*xpf_inject_func)(int, const char*);

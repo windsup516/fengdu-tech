@@ -12,6 +12,13 @@
 // Cross-process log: write to /tmp/ so Stocks app can verify injection succeeded
 static FILE *g_dylibLog = NULL;
 static void dylib_log(const char *fmt, ...) {
+    // Also NSLog so crash logs are visible in device console
+    va_list args2;
+    va_start(args2, fmt);
+    NSString *nsMsg = [[NSString alloc] initWithFormat:[NSString stringWithUTF8String:fmt] arguments:args2];
+    va_end(args2);
+    NSLog(@"[DFOverlay] %@", nsMsg);
+
     if (!g_dylibLog) g_dylibLog = fopen("/tmp/dfoverlay.log", "w");
     if (!g_dylibLog) return;
     time_t now = time(NULL);
@@ -126,6 +133,8 @@ static void dylib_log(const char *fmt, ...) {
 
     self.frameCount++;
 
+    @try {
+
     id<CAMetalDrawable> drawable = [self.metalLayer nextDrawable];
     if (!drawable) {
         if (self.frameCount <= 5) dylib_log("frame#%d: nextDrawable=nil", self.frameCount);
@@ -191,6 +200,10 @@ static void dylib_log(const char *fmt, ...) {
     if (self.frameCount == 1 || self.frameCount % 300 == 0) {
         dylib_log("heartbeat frame#%d screen=%.0fx%.0f", self.frameCount, self.screenW, self.screenH);
     }
+
+    } @catch (NSException *e) {
+        dylib_log("CRASH in renderFrame#%d: %s", self.frameCount, [[e description] UTF8String]);
+    }
 }
 
 - (void)stopOverlay {
@@ -208,13 +221,20 @@ static void dylib_log(const char *fmt, ...) {
 __attribute__((constructor))
 static void DFOverlayInit(void) {
     dylib_log("=== dylib constructor: PID=%d ===", getpid());
-    // Must run on main thread for UIKit
-    if ([NSThread isMainThread]) {
-        [[DFOverlayController shared] startOverlay];
-    } else {
-        dispatch_sync(dispatch_get_main_queue(), ^{
+    @try {
+        if ([NSThread isMainThread]) {
             [[DFOverlayController shared] startOverlay];
-        });
+        } else {
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                @try {
+                    [[DFOverlayController shared] startOverlay];
+                } @catch (NSException *e) {
+                    dylib_log("CRASH in startOverlay: %s", [[e description] UTF8String]);
+                }
+            });
+        }
+    } @catch (NSException *e) {
+        dylib_log("CRASH in constructor: %s", [[e description] UTF8String]);
     }
 }
 
