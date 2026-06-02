@@ -20,6 +20,7 @@
 #import <mach/vm_map.h>
 #import <mach-o/loader.h>
 #import <mach-o/fat.h>
+#import <QuartzCore/QuartzCore.h>
 #import <string.h>
 
 ScannedOffsets g_scanned_offsets = {0};
@@ -439,8 +440,9 @@ static uint64_t scan_gworld_in_data(mach_port_t task, uint64_t text_start, uint6
         for (uint64_t addr = seg_start; addr + 8 <= seg_end; ) {
             // 超时检查
             if (CACurrentMediaTime() > deadline) {
-                HOOKS_LOG(@"DATA scan: deadline reached at offset 0x%llx/0x%llx (%.1f%%)",
-                          addr - seg_start, seg_size, 100.0 * (addr - seg_start) / (double)seg_size);
+                HOOKS_LOG(@"DATA scan: deadline reached at offset %zu/%zu (%.1f%%)",
+                          (size_t)(addr - seg_start), seg_size,
+                          100.0 * (addr - seg_start) / (double)seg_size);
                 free(buf);
                 goto done;
             }
