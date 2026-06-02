@@ -149,10 +149,35 @@ static BOOL g_imGuiInitialized = NO;
         HUD_LOG(@"ChangeUI rendering frame #%d", frameCount);
     }
 
+    // 诊断: 前 60 帧 (1秒) 输出每个细节
+    // 之后每 180 帧 (3秒) 输出一次摘要
+    static int diagCount = 0;
+    diagCount++;
+    if (diagCount <= 60 || diagCount % 180 == 0) {
+        HUD_LOG(@"[DIAG f#%d] screen=%.0fx%.0f scale=%.1f", diagCount,
+                g_screenWidth, g_screenHeight, g_screenScale);
+        HUD_LOG(@"[DIAG f#%d] viewBounds=%@ viewFrame=%@ alpha=%.2f", diagCount,
+                NSStringFromCGRect(self.view.bounds),
+                NSStringFromCGRect(self.view.frame),
+                self.view.alpha);
+        HUD_LOG(@"[DIAG f#%d] metalLayer frame=%@ opaque=%d drawableSize=%@", diagCount,
+                NSStringFromCGRect(gMetalLayer.frame),
+                gMetalLayer.opaque,
+                NSStringFromCGSize(gMetalLayer.drawableSize));
+        // contextId 心跳 (需要 HUDMainWindow 暴露 _contextId)
+        extern unsigned int hudWindowContextId(void);
+        extern unsigned int touchWindowContextId(void);
+        HUD_LOG(@"[DIAG f#%d] hudCtx=%u touchCtx=%u", diagCount,
+                hudWindowContextId(), touchWindowContextId());
+    }
+
     self.animationTime = CACurrentMediaTime();
 
     id<CAMetalDrawable> drawable = [gMetalLayer nextDrawable];
-    if (!drawable) return;
+    if (!drawable) {
+        if (diagCount <= 10) HUD_LOG(@"[DIAG f#%d] nextDrawable returned nil!", diagCount);
+        return;
+    }
 
     id<MTLCommandBuffer> cmdBuffer = [gCmdQueue commandBuffer];
     if (!cmdBuffer) return;

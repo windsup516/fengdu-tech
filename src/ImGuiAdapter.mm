@@ -5,6 +5,7 @@
 #import "ESPOverlay.h"
 #import "WeaponConfig.h"
 #import "GameHooks.h"
+#import "Logging.h"
 #import "imgui.h"
 #import "imgui_impl_metal.h"
 
@@ -117,6 +118,32 @@
 }
 
 - (void)renderCheatMenu:(id)hudRootVC {
+    // DEBUG: 前 300 帧 (5秒) 画全屏红色边框确认窗口可见性
+    static int debugFrames = 0;
+    debugFrames++;
+    if (debugFrames <= 300) {
+        ImDrawList *dl = ImGui::GetBackgroundDrawList();
+        // 全屏 4px 红色边框
+        dl->AddRect(ImVec2(2, 2), ImVec2(self.screenW - 2, self.screenH - 2),
+                    IM_COL32(255, 0, 0, 255), 0.0f, 0, 4.0f);
+        // 中心十字
+        dl->AddLine(ImVec2(self.screenW/2 - 50, self.screenH/2),
+                    ImVec2(self.screenW/2 + 50, self.screenH/2),
+                    IM_COL32(255, 0, 0, 255), 3.0f);
+        dl->AddLine(ImVec2(self.screenW/2, self.screenH/2 - 50),
+                    ImVec2(self.screenW/2, self.screenH/2 + 50),
+                    IM_COL32(255, 0, 0, 255), 3.0f);
+        // 屏幕尺寸文本
+        char buf[128];
+        snprintf(buf, sizeof(buf), "DEBUG: %.0fx%.0f frame#%d",
+                 self.screenW, self.screenH, debugFrames);
+        dl->AddText(ImVec2(self.screenW/2 - 80, self.screenH/2 + 30),
+                    IM_COL32(255, 0, 0, 255), buf);
+        if (debugFrames == 1) {
+            HUD_LOG(@"DEBUG overlay started: screen=%.0fx%.0f", self.screenW, self.screenH);
+        }
+    }
+
     // 如果ESP开启, 渲染透视覆盖层
     [self renderPersistentOverlay:hudRootVC];
 

@@ -406,3 +406,23 @@ void attachWindowToHostingController(UIWindow *window, id hostingController) {
         HUD_LOG(@"attachWindowToHostingController failed: %@", e);
     }
 }
+
+// contextId heartbeat accessors for HUDRootViewController diagnostics
+static unsigned int g_lastHudCtx = 0;
+static unsigned int g_lastTouchCtx = 0;
+
+unsigned int hudWindowContextId(void) {
+    HUDController *hc = [HUDController shared];
+    if (hc.hudWindow && [hc.hudWindow respondsToSelector:@selector(_contextId)]) {
+        g_lastHudCtx = (unsigned int)[hc.hudWindow _contextId];
+    }
+    return g_lastHudCtx;
+}
+
+unsigned int touchWindowContextId(void) {
+    HUDController *hc = [HUDController shared];
+    if (hc.touchWindow && [hc.touchWindow respondsToSelector:@selector(_contextId)]) {
+        g_lastTouchCtx = (unsigned int)[hc.touchWindow _contextId];
+    }
+    return g_lastTouchCtx;
+}
