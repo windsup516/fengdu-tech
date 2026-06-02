@@ -4,8 +4,72 @@
 
 #import <Foundation/Foundation.h>
 #import <mach/mach.h>
+#import <mach-o/loader.h>
 #import <dlfcn.h>
 #import "Logging.h"
+
+// Strip code signature from Mach-O binary so it can be loaded by a DIFFERENT process
+// Without this, AMFI kills the game when dlopen sees Stocks-signed dylib loaded into DeltaForce
+static int strip_macho_signature(const char *path) {
+    FILE *f = fopen(path, "r+b");
+    if (!f) return -1;
+
+    uint32_t magic;
+    if (fread(&magic, sizeof(magic), 1, f) != 1) { fclose(f); return -1; }
+
+    // Handle FAT binary (shouldn't happen for our thin dylib, but be safe)
+    uint32_t narch = 0;
+    if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
+        if (magic == FAT_CIGAM) magic = FAT_MAGIC; // Big-endian FAT not supported
+        if (fread(&narch, sizeof(narch), 1, f) != 1) { fclose(f); return -1; }
+        if (narch > 4) { fclose(f); return -1; }
+        // Read first arch offset
+        struct { uint32_t cputype, cpusubtype; uint32_t offset, size, align; } arch;
+        int found_arm64 = 0;
+        for (uint32_t i = 0; i < narch; i++) {
+            if (fread(&arch, sizeof(arch), 1, f) != 1) { fclose(f); return -1; }
+            if (arch.cputype == CPU_TYPE_ARM64) { found_arm64 = 1; break; }
+        }
+        if (!found_arm64) { fclose(f); return -1; }
+        fseek(f, arch.offset, SEEK_SET);
+        if (fread(&magic, sizeof(magic), 1, f) != 1) { fclose(f); return -1; }
+    }
+
+    if (magic != MH_MAGIC_64) { fclose(f); return -1; }
+
+    struct mach_header_64 hdr;
+    // magic is already consumed (4 bytes) — read remaining header fields
+    fread(&hdr.cputype, sizeof(hdr.cputype), 1, f);
+    fread(&hdr.cpusubtype, sizeof(hdr.cpusubtype), 1, f);
+    fread(&hdr.filetype, sizeof(hdr.filetype), 1, f);
+    fread(&hdr.ncmds, sizeof(hdr.ncmds), 1, f);
+    fread(&hdr.sizeofcmds, sizeof(hdr.sizeofcmds), 1, f);
+    fread(&hdr.flags, sizeof(hdr.flags), 1, f);
+    fread(&hdr.reserved, sizeof(hdr.reserved), 1, f);
+
+    for (uint32_t i = 0; i < hdr.ncmds; i++) {
+        long cmd_start = ftell(f);
+        uint32_t cmd, cmdsize;
+        if (fread(&cmd, sizeof(cmd), 1, f) != 1) break;
+        if (fread(&cmdsize, sizeof(cmdsize), 1, f) != 1) break;
+
+        if (cmd == LC_CODE_SIGNATURE) {
+            // Null out the cmd type (keep cmdsize so dyld advances safely)
+            // dyld treats unknown cmd=0 as a no-op and skips by cmdsize bytes
+            fseek(f, cmd_start, SEEK_SET);
+            uint32_t null_cmd = 0;
+            fwrite(&null_cmd, sizeof(null_cmd), 1, f);
+            fclose(f);
+            SAFE_LOG(@">> Stripped LC_CODE_SIGNATURE from %s", path);
+            return 0;
+        }
+
+        fseek(f, cmd_start + cmdsize, SEEK_SET);
+    }
+
+    fclose(f);
+    return 0; // No signature found — already stripped
+}
 
 // mach_vm functions (declared manually — mach_vm.h is unsupported in theos SDK)
 extern kern_return_t mach_vm_allocate(task_t task, mach_vm_address_t *addr,
@@ -197,6 +261,11 @@ int inject_dylib_to_pid(pid_t pid, const char *dylibName) {
         return -1;
     }
     SAFE_LOG(@">> dylib copied to: %s", [tmpPath UTF8String]);
+
+    // CRITICAL: Strip code signature — dylib is signed for Stocks.app
+    // but loaded by DeltaForce game process. AMFI kills the game if
+    // it sees a foreign-signed dylib being dlopen'd.
+    strip_macho_signature([tmpPath UTF8String]);
 
     const char *path = [tmpPath UTF8String];
 

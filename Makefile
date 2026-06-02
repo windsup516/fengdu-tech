@@ -208,7 +208,12 @@ after-package::
 			$$LDID -S$(CURDIR)/sign.plist "$$dylib" 2>&1 || true; \
 		fi; \
 	done; \
-	echo "=== Step 4b: ldid sign RootHelper ==="; \
+	echo "=== Step 4b: strip DFOverlay.dylib signature (loaded by game process) ==="; \
+		if [ -f "$$APP_DIR/Frameworks/DFOverlay.dylib" ]; then \
+			codesign --remove-signature "$$APP_DIR/Frameworks/DFOverlay.dylib" 2>/dev/null || true; \
+			echo "  DFOverlay.dylib signature stripped — game process dlopen won't trigger AMFI"; \
+		fi; \
+		echo "=== Step 4c: ldid sign RootHelper ==="; \
 	if [ -f "$$APP_DIR/RootHelper" ]; then \
 		codesign --remove-signature "$$APP_DIR/RootHelper" 2>/dev/null || true; \
 		$$LDID -S$(CURDIR)/sign.plist "$$APP_DIR/RootHelper" 2>&1 || { echo "WARNING: RootHelper signing failed"; }; \
