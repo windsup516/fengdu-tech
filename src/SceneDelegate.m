@@ -2,19 +2,17 @@
 // Creates main Stocks window on UIWindowScene
 // BSServiceDomains keeps Scene alive when app backgrounds
 
-#import <UIKit/UIKit.h>
+#import "SceneDelegate.h"
 #import "LoginViewController.h"
 #import "AppDelegate.h"
+#import "AppViewController.h"
 #import "HUDController.h"
+#import "TouchMainWindow.h"
 #import "Logging.h"
 
 // UIWindow private API
 @interface UIWindow (Private)
 - (unsigned int)_contextId;
-@end
-
-@interface SceneDelegate () <UIWindowSceneDelegate>
-@property (nonatomic, strong) UIWindow *window;
 @end
 
 @implementation SceneDelegate
