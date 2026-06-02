@@ -13,8 +13,8 @@
 
 @implementation MetalRenderer
 
-- (instancetype)initWithDevice:(id<MTLDevice>)device 
-                         layer:(CAMetalLayer *)layer 
+- (instancetype)initWithDevice:(id<MTLDevice>)device
+                         layer:(CAMetalLayer *)layer
                    commandQueue:(id<MTLCommandQueue>)commandQueue {
     self = [super init];
     if (self) {
@@ -23,6 +23,10 @@
         _commandQueue = commandQueue;
     }
     return self;
+}
+
+- (void)updateLayer:(CAMetalLayer *)newLayer {
+    _layer = newLayer;
 }
 
 - (void)setupRenderPipeline {

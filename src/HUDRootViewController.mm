@@ -4,6 +4,7 @@
 // 对应原版反编译: -[HUDRootViewController viewDidLoad] (0x1000079d4)
 
 #import "HUDRootViewController.h"
+#import "HUDController.h"
 #import "MetalRenderer.h"
 #import "ImGuiAdapter.h"
 #import "CryptoUtils.h"
@@ -33,7 +34,13 @@ static BOOL g_imGuiInitialized = NO;
 extern "C" {
 unsigned int hudWindowContextId(void);
 unsigned int touchWindowContextId(void);
+void hudTriggerSBSRecovery(void);
 }
+
+// 前向声明
+@interface HUDRootViewController ()
+- (void)recreateMetalLayer;
+@end
 
 @interface HUDRootViewController ()
 @property (nonatomic, strong) CADisplayLink *displayLink;
@@ -170,9 +177,29 @@ unsigned int touchWindowContextId(void);
                 NSStringFromCGRect(gMetalLayer.frame),
                 gMetalLayer.opaque,
                 NSStringFromCGSize(gMetalLayer.drawableSize));
-        // contextId 心跳 (需要 HUDMainWindow 暴露 _contextId)
         HUD_LOG(@"[DIAG f#%d] hudCtx=%u touchCtx=%u", diagCount,
                 hudWindowContextId(), touchWindowContextId());
+    }
+
+    // contextId 恢复: 每帧检查, 连续 N 帧 ctx=0 则触发窗口重建
+    {
+        static int deadFrames = 0;
+        unsigned int hudCtx = hudWindowContextId();
+        if (hudCtx == 0) {
+            deadFrames++;
+            if (deadFrames == 30) {
+                HUD_LOG(@"CONTEXT DEAD for %d frames — triggering recovery", deadFrames);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self recreateMetalLayer];
+                    hudTriggerSBSRecovery();
+                });
+            }
+        } else {
+            if (deadFrames >= 30) {
+                HUD_LOG(@"CONTEXT RECOVERED after %d dead frames", deadFrames);
+            }
+            deadFrames = 0;
+        }
     }
 
     self.animationTime = CACurrentMediaTime();
@@ -264,6 +291,54 @@ unsigned int touchWindowContextId(void);
 
 - (void)handleSenderID:(uint64_t)senderID {
     if (senderID == 0xDEADBEEFCAFE) return;
+}
+
+// contextId 恢复: 强制 UIWindow 重建 CAContext
+// CAMetalLayer 更换不会改变 contextId (contextId 属于 UIWindow 的 CAContext)
+// 必须通过 makeKeyAndVisible 让 window server 分配新的 CAContext
+- (void)recreateMetalLayer {
+    HUD_LOG(@"recreateMetalLayer: forcing window CAContext refresh...");
+
+    // 获取 HUDController 的 hudWindow
+    HUDController *hc = [HUDController shared];
+    UIWindow *hudWin = hc.hudWindow;
+    if (!hudWin) {
+        HUD_LOG(@"recreateMetalLayer: no hudWindow, aborting");
+        return;
+    }
+
+    // 重新创建 CAMetalLayer (确保 layer 本身也是新的)
+    id<MTLDevice> device = gMetalLayer.device;
+    if (device) {
+        [gMetalLayer removeFromSuperlayer];
+
+        CAMetalLayer *newLayer = [CAMetalLayer layer];
+        newLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        newLayer.framebufferOnly = YES;
+        newLayer.opaque = NO;
+        newLayer.maximumDrawableCount = 2;
+        newLayer.presentsWithTransaction = NO;
+        newLayer.device = device;
+        newLayer.frame = CGRectMake(0, 0, g_screenWidth, g_screenHeight);
+        newLayer.drawableSize = CGSizeMake(g_screenWidth * g_screenScale,
+                                            g_screenHeight * g_screenScale);
+
+        UIView *container = gMetalContainer.subviews.firstObject ?: gMetalContainer;
+        [container.layer addSublayer:newLayer];
+        gMetalLayer = newLayer;
+
+        if (self.renderer) {
+            [self.renderer updateLayer:newLayer];
+        }
+        HUD_LOG(@"recreateMetalLayer: CAMetalLayer replaced");
+    }
+
+    // 强制 UIWindow 重新连接 render server 获取新 contextId
+    hudWin.hidden = NO;
+    [hudWin makeKeyAndVisible];
+    hudWin.windowLevel = 10000010.0;
+    HUD_LOG(@"recreateMetalLayer: makeKeyAndVisible called, new ctx=%u",
+            hudWindowContextId());
 }
 
 @end

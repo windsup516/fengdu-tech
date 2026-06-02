@@ -733,3 +733,99 @@ scan_all_offsets():
 2. **单一验证链一定会有假阳性**。68MB 数据段 = 890 万个 uint64。即使只有 0.01% 碰巧通过验证，也是 890 个假候选
 3. **交叉验证是免费的可靠性提升**。两个独立策略结果一致 → 置信度趋近 100%；不一致 → 至少知道有问题的
 4. **不要找到第一个高置信度候选就早退**。跑完所有策略再决策，`goto done` 省的时间远不如误报浪费的时间
+
+---
+
+## 25. HUD contextId 在切游戏后必定归零 — iOS 后台渲染上下文回收
+
+### 现象
+
+```
+f#35  hudCtx=3492377566 touchCtx=2713138062  ← 还有效
+f#36  hudCtx=0 touchCtx=0                    ← 归零，从此再也看不到悬浮窗
+```
+
+渲染循环 (ChangeUI) 在跑，ImGui 在绘制，但窗口的 render server context 死了。渲染命令发出去全部被丢弃。
+
+### 根本原因
+
+`_contextId` 是 UIWindow 内部 CAContext 的 render server 标识符，由 **backboardd** 分配。
+当 Stocks app 进入后台、游戏切到前台时：
+
+1. `UIApplicationWillResignActiveNotification` 触发
+2. backboardd 断开 Stocks 进程的 render server 连接
+3. 所有 UIWindow 的 `_contextId` 变成 0
+4. render loop 继续跑但渲染结果没人消费
+
+**为什么 f#35 的 contextId (3492377566, 2713138062) 和初始值 (1284485140, 589244278) 完全不同？**
+iOS 在场景切换过程中可能会临时重建窗口的 CAContext，获得短暂的 contextId，
+但一旦确认 app 进入后台就立即回收。这就是 f#36 立刻归零的原因。
+
+**SBSAccessibilityWindowHostingController 为什么没有阻止？**
+SBS 需要通过正确的 API 注册。如果注册时传递的是过时的 contextId、
+或者用了错误的 selector（缺少 UIWindow 参数），SpringBoard 无法持有窗口引用，
+后台回收照常发生。
+
+### 修复
+
+#### A. SBS 注册优先使用 3-arg selector
+
+```objc
+// 旧: 2-arg — SBS 没有 UIWindow 引用，无法阻止后台回收
+SEL sel = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
+// 只传 contextID + level
+
+// 新: 3-arg — SBS 持有 UIWindow* 强引用，可以阻止后台回收
+SEL sel = NSSelectorFromString(@"registerWindow:contextID:windowLevel:");
+// 传递 UIWindow* + contextID + level
+// 类型编码: v@:@Id (window=@, contextID=I, level=d)
+```
+
+如果 3-arg selector 不响应，降级到 2-arg 并记录警告。
+
+#### B. 退后台前主动重注册 (最后机会)
+
+在 `UIApplicationWillResignActiveNotification` 中，趁 contextId 还有效，
+主动调用 SBS 注册。这是告诉 SpringBoard "请保留这个窗口" 的最后时机。
+
+```objc
+// 在 contextId 还活着时 (非 0) 主动注册
+if (hudCtx != 0 && hostingController) {
+    attachWindowToHostingController(hudWindow, hostingController);
+}
+```
+
+#### C. 进入后台后诊断日志
+
+在 `UIApplicationDidEnterBackgroundNotification` 中立即检查 contextId，
+确认是活着 (SBS 保住了) 还是死了 (被回收)。
+
+#### D. 渲染循环 contextId 恢复机制
+
+每帧检查 contextId（不只在诊断帧）：
+- 连续 30 帧 (0.5秒) `hudCtx == 0` → 触发恢复
+- 恢复：重建 CAMetalLayer + 调用 `makeKeyAndVisible` 强制分配新 CAContext + 立即重注册 SBS
+
+```objc
+static int deadFrames = 0;
+unsigned int hudCtx = hudWindowContextId();
+if (hudCtx == 0) {
+    deadFrames++;
+    if (deadFrames == 30) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self recreateMetalLayer];   // 重建 layer + makeKeyAndVisible
+            hudTriggerSBSRecovery();     // 重注册 SBS
+        });
+    }
+} else {
+    deadFrames = 0;
+}
+```
+
+### 关键教训
+
+1. **iOS 后台必定回收 render context** — 这是 backboardd 的省电机制，无法绕过
+2. **SBSAccessibilityWindowHostingController 是唯一的救命稻草** — 必须在 contextId 有效时注册，且传 UIWindow 对象
+3. **contextId ≠ CAMetalLayer** — contextId 是 UIWindow 的 CAContext 的 ID，跟 CAMetalLayer 无关。只换 Metal Layer 不换 contextId
+4. **makeKeyAndVisible 从后台调用可能拿到临时 contextId** (如 f#35)，需立即 SBS 注册才能持久化
+5. **如果 SBS 注册仍然失败** — 终极方案是 dylib 注入游戏进程，从游戏内部创建 overlay window（游戏是前台 app，context 永不被回收）
