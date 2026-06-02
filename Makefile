@@ -38,9 +38,9 @@ Stocks_FILES = \
 	include/imgui/imgui_widgets.cpp \
 	include/imgui/backends/imgui_impl_metal.mm
 Stocks_CFLAGS = -fobjc-arc -Iinclude -Iinclude/imgui -Iinclude/imgui/backends -I$(THEOS)/include \
-	-Wno-error=unused-const-variable -Wno-error=unused-variable -Wno-error=nullability-completeness -Wno-error=incompatible-pointer-types
+	-Wno-error=unused-const-variable -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=nullability-completeness -Wno-error=incompatible-pointer-types
 Stocks_OBJCCFLAGS = -fobjc-arc -std=c++17 -stdlib=libc++ -Iinclude -Iinclude/imgui -Iinclude/imgui/backends -I$(THEOS)/include \
-	-Wno-error=unused-const-variable -Wno-error=unused-variable -Wno-error=nullability-completeness
+	-Wno-error=unused-const-variable -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=nullability-completeness
 Stocks_CCFLAGS = -std=c++17 -stdlib=libc++ -Iinclude -Iinclude/imgui -Iinclude/imgui/backends -I$(THEOS)/include
 Stocks_LDFLAGS = -lz -lobjc -framework UIKit -framework Metal \
 	-framework MetalKit -framework CoreGraphics \
