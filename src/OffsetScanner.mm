@@ -746,18 +746,17 @@ int scan_all_offsets(mach_port_t task, uint64_t gameBase) {
         HOOKS_LOG(@"GWorld cross-validated: DATA=0x%llx TEXT=0x%llx MATCH",
                   gworld_data_addr, gworld_text_addr);
     } else if (gworld_data_addr && gworld_text_addr) {
-        // 两个策略找到了不同的地址 — 优先用 TEXT 扫描结果 (ADRP+LDR 模式更可靠)
-        HOOKS_LOG(@"GWorld mismatch: DATA=0x%llx TEXT=0x%llx — using TEXT result",
+        // DATA scan passed full validation chain (vtable->PersistentLevel->Actors)
+        // TEXT scan just counts refs and often hits false positives at high refs
+        HOOKS_LOG(@"GWorld mismatch: DATA=0x%llx TEXT=0x%llx — using DATA (validated)",
                   gworld_data_addr, gworld_text_addr);
-        gworld_ptr_addr = gworld_text_addr;
-    } else if (gworld_text_addr) {
-        // 只有 TEXT 扫描找到 — ADRP+LDR 模式比纯指针扫描更可靠
-        gworld_ptr_addr = gworld_text_addr;
-        HOOKS_LOG(@"GWorld from TEXT scan only: 0x%llx", gworld_text_addr);
-    } else if (gworld_data_addr) {
-        // 只有 DATA 扫描找到 — 保守接受但标记需验证
         gworld_ptr_addr = gworld_data_addr;
-        HOOKS_LOG(@"GWorld from DATA scan only (unverified): 0x%llx", gworld_data_addr);
+    } else if (gworld_data_addr) {
+        gworld_ptr_addr = gworld_data_addr;
+        HOOKS_LOG(@"GWorld from DATA scan: 0x%llx", gworld_data_addr);
+    } else if (gworld_text_addr) {
+        gworld_ptr_addr = gworld_text_addr;
+        HOOKS_LOG(@"GWorld from TEXT scan only: 0x%llx (unvalidated)", gworld_text_addr);
     }
 
     if (gworld_ptr_addr) {
