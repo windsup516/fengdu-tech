@@ -186,3 +186,192 @@ Stocks_OBJCCFLAGS = -fobjc-arc -Wno-error=unused-function
 **解决**: 在 `createWindowsOnScene:` 中检测 nil，fallback 到 `[UIApplication sharedApplication].connectedScenes.anyObject`。
 
 **通用原则**: iOS 13+ app 必须理解 Scene-based 生命周期。旧代码假设 `UIWindow` 可以直接 `makeKeyAndVisible` 在 iOS 13+ 上不会工作。
+
+---
+
+## 12. makeKeyAndVisible 重置 windowLevel
+
+**问题**: `hudWindow.windowLevel = 10000010.0; [hudWindow makeKeyAndVisible];` 之后读取 level 变成了 10000000。
+
+**原因**: 对 touchWindow 调用 `makeKeyAndVisible` 时，UIKit 在 key window 切换过程中会调整其他窗口的 level。先设 level 再 makeKey 会被覆盖。
+
+**解决**: **先 makeKeyAndVisible，后设 windowLevel**：
+
+```objc
+self.hudWindow.hidden = NO;
+[self.hudWindow makeKeyAndVisible];
+self.hudWindow.windowLevel = 10000010.0;  // AFTER makeKeyAndVisible
+```
+
+同时在 `show`、后台恢复、前台激活等所有路径中重新设置 windowLevel。
+
+**通用原则**: `makeKeyAndVisible` / `makeKeyWindow` 都有副作用，会改变窗口的多个属性。关键属性（level、frame）应该在 makeKey 之后再设置。
+
+---
+
+## 13. SBS contextId 后台丢失与窗口重建
+
+**问题**: App 切后台再回来，`_contextId` 变成 0。仅重新调用 SBS 注册无效，窗口永远无法再显示在游戏上层。
+
+**根因**: `_contextId` 是窗口与 render server 的连接标识。App 进入后台后系统可能回收窗口的渲染资源，contextId 归零后仅靠 SBS 重注册无法恢复。必须**销毁窗口并完全重建**。
+
+**解决**:
+
+```objc
+- (void)reRegisterSBSHosting {
+    unsigned int ctx = [self.hudWindow _contextId];
+    if (ctx == 0) {
+        // 销毁 + 重建，不能只重注册
+        self.hudWindow.hidden = YES;
+        self.touchWindow.hidden = YES;
+        self.hudWindow = nil;
+        self.touchWindow = nil;
+        self.hostingController = nil;
+        self.windowsCreated = NO;
+
+        id scene = [UIApplication sharedApplication].connectedScenes.anyObject;
+        [self createWindowsOnScene:scene];
+        [self show];
+        return;
+    }
+    // 正常路径: contextId 有效，仅重注册 SBS
+    attachWindowToHostingController(self.hudWindow, self.hostingController);
+    attachWindowToHostingController(self.touchWindow, self.hostingController);
+}
+```
+
+**通用原则**: `_contextId` 是窗口在 render server 侧的生命周期标识。变 0 = 窗口在服务端已不可用。此时任何注册/刷新都无效，必须重建 `UIWindow` 实例。
+
+---
+
+## 14. viewDidLoad 日志盲区 (NSLog vs 文件日志)
+
+**问题**: `HUDRootViewController.viewDidLoad` 里大量 `NSLog` 但文件日志一条都没有。Metal 是否初始化成功完全不可观测。
+
+**原因**: `NSLog` 写入 unified system log，不走 `central_log` 的文件路径。用户在设备上用 Filza 看文件日志，看不到 NSLog 输出。
+
+**解决**: 所有关键路径日志改用 `HUD_LOG` 宏（走 `central_log` → 文件 + stderr）。在 viewDidLoad 关键节点加：
+
+```objc
+HUD_LOG(@"viewDidLoad: starting Metal+ImGui init...");
+HUD_LOG(@"Screen: %.0fx%.0f scale=%.1f", w, h, scale);
+HUD_LOG(@"ImGui context created");
+HUD_LOG(@"ImGui Metal backend initialized (device=%s)", [device name UTF8String]);
+HUD_LOG(@"Metal+ImGui ready, rendering=%d displayLink=%@", ...);
+```
+
+同时在渲染循环首帧确认：
+```objc
+static int frameCount = 0;
+if (++frameCount == 1 || frameCount % 300 == 0) {
+    HUD_LOG(@"ChangeUI rendering frame #%d", frameCount);
+}
+```
+
+**通用原则**: 凡是需要在设备端离线查看的诊断信息，一律用文件日志宏（HUD_LOG/SAFE_LOG），不要只靠 NSLog。NSLog = Mac 专属；文件日志 = 任何设备都能看。
+
+---
+
+## 15. prepareForEntryAnimation 卡在 alpha=0
+
+**问题**: `prepareForEntryAnimation` 先设 `self.view.alpha = 0.0` 再 `UIView animate` 到 1.0。如果动画触发时窗口还没上 render server，动画不会执行，view 永远透明。
+
+**解决**: 加兜底定时器，0.5 秒后检测 alpha 是否恢复：
+
+```objc
+- (void)prepareForEntryAnimation {
+    self.view.alpha = 0.0;
+    [UIView animateWithDuration:0.25 animations:^{
+        self.view.alpha = 1.0;
+    }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC),
+                   dispatch_get_main_queue(), ^{
+        if (self.view.alpha < 0.5) {
+            self.view.alpha = 1.0;  // force visible
+        }
+    });
+}
+```
+
+**通用原则**: 涉及窗口/视图显示的动画不能假设一定执行。窗口可能不在 render tree 里，动画被静默跳过。加超时兜底是防御性编程的基本操作。
+
+---
+
+## 16. RootHelper dylib 路径拼接 bug
+
+**问题**: RootHelper 尝试加载 dylib 时报 `errno=2`（文件不存在），路径是：
+```
+/.../Stocks/Frameworks/libjailbreak.dylib
+```
+正确路径应该是：
+```
+/.../Stocks.app/Frameworks/libjailbreak.dylib
+```
+
+**根因**: `_NSGetExecutablePath` 返回 `/.../Stocks.app/RootHelper`，拼接路径时多了一步 `stringByDeletingPathExtension`：
+
+```objc
+// BUG: stringByDeletingPathExtension 把 .app 删了
+NSString *fwDir = [[[exeStr stringByDeletingLastPathComponent]
+                   stringByDeletingPathExtension]  // Stocks.app → Stocks
+                  stringByAppendingPathComponent:@"Frameworks"];
+// 结果: /.../Stocks/Frameworks  ← 错误
+
+// FIX: 直接拼接，不去扩展名
+NSString *fwDir = [[exeStr stringByDeletingLastPathComponent]
+                  stringByAppendingPathComponent:@"Frameworks"];
+// 结果: /.../Stocks.app/Frameworks  ← 正确
+```
+
+**通用原则**: `stringByDeletingPathExtension` 对 `.app` 目录也是生效的（它会删最后一个 `.xxx` 后缀）。在 bundle 路径上做字符串操作时，永远验证最终路径是否与 `[[NSBundle mainBundle] bundlePath]` 一致。
+
+---
+
+## 17. TrollStore 环境权限边界
+
+**问题**: RootHelper 名叫 RootHelper 但 log 显示 `euid=501 uid=501 gid=501`（普通 mobile 用户），不是 root。
+
+**根因**: TrollStore 不是越狱。它通过 CoreTrust bug 绕过代码签名，拿到 `platform-application`、`no-sandbox`、`task_for_pid-allow` 等 entitlement，但**不会给你 root**。`euid=0` 需要越狱或独立的 kernel exploit。
+
+**TrollStore 实际能给的权限（已验证）**:
+- `platform-application = TRUE` — 平台应用级别
+- `no-sandbox = TRUE` — 无沙盒，任意读写文件系统
+- `task_for_pid-allow = TRUE` — 可以对任意进程 task_for_pid
+- `proc_pidpath` / `proc_listallpids` / `sysctl(KERN_PROC_ALL)` — 进程枚举
+- 直接 attach 游戏进程做 vm_read/vm_write
+
+**TrollStore 不能给的**:
+- `root` (euid=0) — 必须越狱或 kernel exploit
+- `com.apple.system-task-ports` — 需要 Apple 签名
+- `get-task-allow` — 需要 Apple 签名
+- kernel task port — 需要 kernel exploit
+
+**结论**: 当前走的是 **platform + no-sandbox + task_for_pid** 这条路，不是 kernel exploit 路线。RootHelper 改名叫 Helper 更准确。
+
+**通用原则**: 做 iOS 工具首先要搞清楚自己在什么权限模型下运行。TrollStore ≠ 越狱，权限差距很大。不要用越狱思维做 TrollStore 开发。
+
+---
+
+## 18. libjailbreak.dylib 符号缺失诊断
+
+**问题**: dylib 能正常 `dlopen` 加载，但 `dlsym` 查 `jb_init`、`exploit_get_kernel_task`、`kern_reading`、`kern_writing` 全部返回 NULL。
+
+**根因**: 当前 dylib 只导出了 `physread64`、`physwritebuf`、`phystokv`、`kcall`、`kalloc` 这几个物理内存操作函数。`jb_init`（越狱环境初始化）、`exploit_get_kernel_task`（拿 kernel task port）、`kern_reading`/`kern_writing`（内核读写全局标志）这三个符号在 dylib 源码中未实现或未导出。
+
+**实际可用 vs 缺失**:
+```
+可用: physread64=0x10787426c  physwritebuf=0x107873434
+      phystokv=0x107874fd0    kcall=0x1078748f8
+      kalloc=0x1078749c4
+
+缺失: jb_init=0x0  exploit_get_kernel_task=0x0
+      kern_reading=0x0  kern_writing=0x0
+```
+
+**影响**: 内核 exploit 路线不可用，但 `platform + task_for_pid` 路线正常。游戏进程 attach、vm_read、偏移扫描都正常工作。
+
+**解决方向**: 需要在 dylib 源码中实现：
+- `jb_init()` — 执行内核 exploit，获取 kernel task port，成功后设置 `kern_reading=1`、`kern_writing=1`
+- `exploit_get_kernel_task()` — 返回 kernel task port（用于 kcall 内存操作）
+
+**通用原则**: 先验证 dylib 导出符号是否完整再追其他问题。`dlopen` 成功 ≠ 符号完整。用 `dlsym` + NULL 检查每个关键函数指针。
