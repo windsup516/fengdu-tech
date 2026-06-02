@@ -401,22 +401,62 @@ static void install_crash_handlers(void) {
         SAFE_LOG("HUD overlay started");
     }
 
-    // 前台预检: 确认进程枚举 API 可用
-    // 在切后台之前先测一次, 排除 API 本身的问题
+    // 前台预检: 逐层诊断所有进程枚举 API
+    // 依次测试: proc_pidpath / task_for_pid / proc_name / proc_listallpids / proc_listpids
     {
+        pid_t myPid = getpid();
+        SAFE_LOG("=== Foreground API diagnostic (self PID=%d) ===", myPid);
+
+        // 测试1: proc_pidpath — 能读自身路径吗?
+        char pathbuf[PROC_PIDPATHINFO_MAXSIZE] = {0};
+        errno = 0;
+        int ppRet = proc_pidpath(myPid, pathbuf, sizeof(pathbuf));
+        SAFE_LOG("Test1 proc_pidpath(self): ret=%d errno=%d path=%s", ppRet, errno, ppRet > 0 ? pathbuf : "(fail)");
+
+        // 测试2: task_for_pid — 能获取自身 task port 吗?
+        mach_port_t selfTask = MACH_PORT_NULL;
+        errno = 0;
+        kern_return_t tfpRet = task_for_pid(mach_task_self(), myPid, &selfTask);
+        SAFE_LOG("Test2 task_for_pid(self): kr=%d errno=%d task=%x", tfpRet, errno, selfTask);
+        if (selfTask != MACH_PORT_NULL) {
+            mach_port_deallocate(mach_task_self(), selfTask);
+        }
+
+        // 测试3: task_for_pid 测几个系统 PID (1=launchd, 典型后台进程)
+        for (int tp = 1; tp <= 10; tp++) {
+            mach_port_t t = MACH_PORT_NULL;
+            kr = task_for_pid(mach_task_self(), tp, &t);
+            if (kr == KERN_SUCCESS) {
+                SAFE_LOG("Test3 task_for_pid(%d): SUCCESS task=%x", tp, t);
+                mach_port_deallocate(mach_task_self(), t);
+            }
+        }
+
+        // 测试4: proc_name — 能读自身进程名吗?
+        char myName[64] = {0};
+        errno = 0;
+        proc_name(myPid, myName, sizeof(myName)-1);
+        SAFE_LOG("Test4 proc_name(self): name='%s' errno=%d", myName, errno);
+
+        // 测试5: proc_listallpids
         int pidbuf[256];
         errno = 0;
         int testN = proc_listallpids(pidbuf, sizeof(pidbuf));
-        SAFE_LOG("Foreground proc_listallpids test: ret=%d errno=%d bufsize=%zu",
-                 testN, errno, sizeof(pidbuf));
+        SAFE_LOG("Test5 proc_listallpids: ret=%d errno=%d bufsize=%zu", testN, errno, sizeof(pidbuf));
         if (testN > 0) {
-            SAFE_LOG("Foreground enum OK, first 10 PIDs:");
-            for (int i = 0; i < testN && i < 10; i++) {
+            for (int i = 0; i < testN && i < 5; i++) {
                 char pn[64] = {0};
                 proc_name(pidbuf[i], pn, sizeof(pn)-1);
-                SAFE_LOG("  [%d] %s", pidbuf[i], pn);
+                SAFE_LOG("  PID[%d]=%d name=%s", i, pidbuf[i], pn);
             }
         }
+
+        // 测试6: proc_listpids(PROC_ALL_PIDS)
+        errno = 0;
+        int testN2 = proc_listpids(1 /* PROC_ALL_PIDS */, 0, pidbuf, sizeof(pidbuf));
+        SAFE_LOG("Test6 proc_listpids: ret=%d errno=%d", testN2, errno);
+
+        SAFE_LOG("=== Foreground diagnostic complete ===");
     }
 
     // 后台: 先启动游戏, 再注入

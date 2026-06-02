@@ -97,16 +97,30 @@ static pid_t find_pid_by_name_multi(const char **names) {
     // === 方法3: PID 暴力扫描 ===
     if (npids <= 0) {
         hooks_log(@"libproc enumeration failed, falling back to PID brute force...");
+
+        // 先自测: task_for_pid 对自身 PID 能否成功
+        {
+            mach_port_t selfTask = MACH_PORT_NULL;
+            kern_return_t selfKr = task_for_pid(mach_task_self(), getpid(), &selfTask);
+            hooks_log(@"Brute force self-test: task_for_pid(%d) kr=%d task=%x",
+                      getpid(), selfKr, selfTask);
+            if (selfTask != MACH_PORT_NULL) {
+                mach_port_deallocate(mach_task_self(), selfTask);
+            }
+        }
+
         pid_t bf_found = -1;
         int scanned = 0, success = 0;
-        // 游戏进程通常在 300-1500 范围
-        for (pid_t p = 100; p < 2000; p++) {
+        int firstSuccessPid = -1;
+        // 从 PID 1 开始扫, 范围扩大到 3000
+        for (pid_t p = 1; p < 3000; p++) {
             mach_port_t testTask = MACH_PORT_NULL;
-            if (task_for_pid(mach_task_self(), p, &testTask) != KERN_SUCCESS) {
+            kern_return_t kr = task_for_pid(mach_task_self(), p, &testTask);
+            if (kr != KERN_SUCCESS) {
                 continue;
             }
             success++;
-            // task_for_pid 成功后必须释放端口
+            if (firstSuccessPid < 0) firstSuccessPid = p;
             mach_port_deallocate(mach_task_self(), testTask);
 
             char pname[64] = {0};
@@ -117,23 +131,22 @@ static pid_t find_pid_by_name_multi(const char **names) {
             for (const char **n = names; *n; n++) {
                 if (strcasecmp(pname, *n) == 0) {
                     bf_found = p;
-                    hooks_log(@"Brute force found: '%s' PID=%d (matched '%s', scanned=%d success=%d)",
+                    hooks_log(@"Brute force found: '%s' PID=%d (matched '%s', scanned=%d success=%d firstOk=%d)",
                               [NSString stringWithUTF8String:pname], p,
-                              [NSString stringWithUTF8String:*n], scanned, success);
+                              [NSString stringWithUTF8String:*n], scanned, success, firstSuccessPid);
                     return bf_found;
                 }
             }
-            // 子串匹配兜底
             if (strcasestr(pname, "delta") || strcasestr(pname, "dfm") ||
                 strcasestr(pname, "tmgp") || strcasestr(pname, "force")) {
                 bf_found = p;
-                hooks_log(@"Brute force substring: '%s' PID=%d (scanned=%d success=%d)",
-                          [NSString stringWithUTF8String:pname], p, scanned, success);
+                hooks_log(@"Brute force substring: '%s' PID=%d (scanned=%d success=%d firstOk=%d)",
+                          [NSString stringWithUTF8String:pname], p, scanned, success, firstSuccessPid);
                 return bf_found;
             }
         }
-        hooks_log(@"PID brute force exhausted: scanned=%d task_for_pid_success=%d",
-                  scanned, success);
+        hooks_log(@"PID brute force exhausted: scanned=%d task_for_pid_success=%d firstSuccessPid=%d",
+                  scanned, success, firstSuccessPid);
         return bf_found;
     }
 
