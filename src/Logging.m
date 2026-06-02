@@ -3,8 +3,9 @@
 // Uses NSString formatting (supports %@ for ObjC objects)
 //
 // Path priority:
-//   1. /tmp/debug_stocks.log — most reliable on TrollStore (no container needed)
-//   2. Documents/debug.log    — fallback (accessible via iTunes file sharing)
+//   1. /var/mobile/Documents/风度_debug.log — Filza-browsable, no Mac needed
+//   2. /tmp/debug_stocks.log — fallback
+//   3. Documents/debug.log    — last resort (iTunes file sharing)
 
 #import <Foundation/Foundation.h>
 #import <time.h>
@@ -33,10 +34,14 @@ void central_log(const char *tag, NSString *fmt, ...) {
 
     // Step 3: Lazy-init file handle (no lock — debug logging tolerates rare interleaving)
     if (!g_centralLogFile) {
-        // Try /tmp first — no container sandbox required for TrollStore
-        g_centralLogFile = fopen("/tmp/debug_stocks.log", "a");
+        // Try /var/mobile/Documents first — directly browsable via Filza, no Mac needed
+        g_centralLogFile = fopen("/var/mobile/Documents/风度_debug.log", "a");
         if (!g_centralLogFile) {
-            // Fallback to Documents container
+            // Fallback 1: /tmp — no container sandbox needed
+            g_centralLogFile = fopen("/tmp/debug_stocks.log", "a");
+        }
+        if (!g_centralLogFile) {
+            // Fallback 2: App container Documents (iTunes file sharing)
             NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
             if (paths.count > 0) {
                 NSString *docLog = [paths[0] stringByAppendingPathComponent:@"debug.log"];

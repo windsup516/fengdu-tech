@@ -168,7 +168,6 @@ static int clean_environment_markers(void) {
     const char *markers[] = {
         "/tmp/.trollstore",
         "/tmp/.injected",
-        "/tmp/debug_stocks.log",
         "/tmp/deltaforce_helper.sock",
         "/tmp/.cydia_no_stash",
         NULL
