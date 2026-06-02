@@ -5,6 +5,7 @@
 
 #import <Foundation/Foundation.h>
 #import <mach/mach.h>
+#import <mach-o/dyld.h>
 #import <sys/sysctl.h>
 #import <sys/socket.h>
 #import <sys/un.h>
@@ -12,6 +13,7 @@
 #import <signal.h>
 #import <dlfcn.h>
 #import <spawn.h>
+#import <libproc.h>
 
 #define HELPER_SOCK_PATH "/tmp/deltaforce_helper.sock"
 #define GAME_PROCESS_NAME "DeltaForceClient"

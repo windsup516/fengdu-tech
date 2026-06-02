@@ -111,16 +111,23 @@ static void resolve_dylib_functions(void) {
         return;
     }
 
-    void *jbHandle = dlopen([fwPath UTF8String], RTLD_NOLOAD | RTLD_LAZY);
+    // RTLD_LAZY 真实加载（不用 RTLD_NOLOAD，那个只查已加载的）
+    void *jbHandle = dlopen([fwPath UTF8String], RTLD_LAZY);
     if (!jbHandle) {
-        jbHandle = dlopen("@rpath/libjailbreak.dylib", RTLD_NOLOAD | RTLD_LAZY);
+        // 打完整 dlerror，可能的错误：签名无效、架构不匹配、依赖缺失、LC_RPATH 不对
+        const char *err = dlerror();
+        SAFE_LOG("Dylib dlopen FAILED (abs path): %s", err ? err : "unknown");
+
+        // Fallback: 尝试 @rpath（如果 dylib 的 install_name 是 @rpath）
+        jbHandle = dlopen("@rpath/libjailbreak.dylib", RTLD_LAZY);
         if (!jbHandle) {
-            SAFE_LOG("Dylib dlopen FAILED: %s", dlerror());
+            err = dlerror();
+            SAFE_LOG("Dylib dlopen FAILED (@rpath): %s", err ? err : "unknown");
             return;
         }
-        SAFE_LOG("Dylib opened via @rpath");
+        SAFE_LOG("Dylib loaded via @rpath");
     } else {
-        SAFE_LOG("Dylib opened via Frameworks path");
+        SAFE_LOG("Dylib loaded OK (abs path)");
     }
 
     real_jb_init = dlsym(jbHandle, "jb_init");

@@ -68,25 +68,42 @@ after-package::
 	@cp -rL $(THEOS_STAGING_DIR)/Applications/Stocks.app/* /tmp/Stocks.tipa.work/Payload/Stocks.app/
 	@# === 编译 + 捆绑 RootHelper ===
 	@echo "==> Compiling RootHelper..."
-	@SDK=$$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || echo ""); \
-	if [ -z "$$SDK" ]; then \
-		echo "WARNING: xcrun SDK not found, trying Theos SDK..."; \
-		SDK="$(THEOS)/sdks/iPhoneOS16.5.sdk"; \
-	fi; \
-	if [ -d "$$SDK" ]; then \
-		echo "Using SDK: $$SDK"; \
-		clang -arch arm64 -isysroot "$$SDK" -miphoneos-version-min=13.0 \
-			-fobjc-arc -Iinclude -I$(THEOS)/include \
-			-o /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper \
-			src/RootHelper.m \
-			-framework Foundation \
-			-lobjc 2>&1 || echo "WARNING: RootHelper compile failed, continuing..."; \
-		if [ -f /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper ]; then \
-			echo "RootHelper compiled OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper) bytes"; \
-			chmod +x /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper; \
-		fi; \
+	@CLANG=$$(which clang 2>/dev/null || echo ""); \
+	if [ -z "$$CLANG" ]; then \
+		echo "FATAL: clang not found in PATH"; \
 	else \
-		echo "WARNING: No SDK available for RootHelper compilation"; \
+		echo "clang: $$CLANG"; \
+		SDK=$$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || echo ""); \
+		if [ -z "$$SDK" ]; then \
+			for try_sdk in \
+				"$(THEOS)/sdks/iPhoneOS16.5.sdk" \
+				"$(THEOS)/sdks/iPhoneOS16.0.sdk" \
+				"$(THEOS)/sdks/iPhoneOS15.0.sdk" \
+				"/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk" \
+				"/Applications/Xcode_16.2.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"; do \
+				if [ -d "$$try_sdk" ]; then SDK="$$try_sdk"; break; fi; \
+			done; \
+		fi; \
+		if [ -z "$$SDK" ] || [ ! -d "$$SDK" ]; then \
+			echo "WARNING: No iOS SDK found (tried xcrun + Theos + Xcode paths)"; \
+		else \
+			echo "SDK: $$SDK"; \
+			echo "Compiling: src/RootHelper.m -> RootHelper"; \
+			COMPILE_CMD="$$CLANG -arch arm64 -isysroot $$SDK -miphoneos-version-min=13.0 \
+				-fobjc-arc -Iinclude -I$(THEOS)/include \
+				-o /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper \
+				src/RootHelper.m -framework Foundation -lobjc"; \
+			echo "  $$COMPILE_CMD"; \
+			$$COMPILE_CMD 2>&1; COMPILE_EXIT=$$?; \
+			if [ $$COMPILE_EXIT -ne 0 ]; then \
+				echo "WARNING: RootHelper compile failed (exit=$$COMPILE_EXIT)"; \
+			elif [ -f /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper ]; then \
+				echo "RootHelper compiled OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper) bytes"; \
+				chmod +x /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper; \
+			else \
+				echo "WARNING: RootHelper output file not found after compilation"; \
+			fi; \
+		fi; \
 	fi
 	@cp Info.plist /tmp/Stocks.tipa.work/Payload/Stocks.app/
 	@for f in AppIcon60x60@2x.png AppIcon76x76@2x~ipad.png Assets.car PkgInfo; do \
