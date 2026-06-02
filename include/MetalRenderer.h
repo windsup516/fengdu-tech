@@ -16,6 +16,7 @@
 - (void)beginFrame;
 - (void)endFrame;
 - (void)drawWithDrawable:(id<CAMetalDrawable>)drawable;
+- (void)updateLayer:(CAMetalLayer *)newLayer;
 
 @end
 #endif
