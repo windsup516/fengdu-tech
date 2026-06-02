@@ -401,6 +401,24 @@ static void install_crash_handlers(void) {
         SAFE_LOG("HUD overlay started");
     }
 
+    // 前台预检: 确认进程枚举 API 可用
+    // 在切后台之前先测一次, 排除 API 本身的问题
+    {
+        int pidbuf[256];
+        errno = 0;
+        int testN = proc_listallpids(pidbuf, sizeof(pidbuf));
+        SAFE_LOG("Foreground proc_listallpids test: ret=%d errno=%d bufsize=%zu",
+                 testN, errno, sizeof(pidbuf));
+        if (testN > 0) {
+            SAFE_LOG("Foreground enum OK, first 10 PIDs:");
+            for (int i = 0; i < testN && i < 10; i++) {
+                char pn[64] = {0};
+                proc_name(pidbuf[i], pn, sizeof(pn)-1);
+                SAFE_LOG("  [%d] %s", pidbuf[i], pn);
+            }
+        }
+    }
+
     // 后台: 先启动游戏, 再注入
     // 使用 beginBackgroundTask 防止 iOS 挂起扫描线程
     __block UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;

@@ -8,13 +8,6 @@
 #import <mach/vm_map.h>
 #import <mach-o/loader.h>
 
-// libproc 手动声明 (libproc.h 在 iOS SDK 中不可用)
-#ifndef PROC_PIDPATHINFO_MAXSIZE
-#define PROC_PIDPATHINFO_MAXSIZE 4096
-#endif
-extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
-extern "C" int proc_listallpids(void *buffer, int buffersize);
-extern "C" int proc_name(int pid, void *buffer, uint32_t buffersize);
 #import <dlfcn.h>
 
 #ifndef GAME_PROCESS_NAME
@@ -78,18 +71,70 @@ static void hooks_log(NSString *fmt, ...) {
 
 #pragma mark - 进程查找与附加
 
-// 通过进程名查找 PID — 使用 proc_listallpids (libproc)
-// iOS 15+ 沙箱封堵了 sysctl(KERN_PROC_ALL), 改用 libproc API
+// 通过进程名查找 PID — 三层 fallback
+//   1. proc_listallpids (libproc, 不走 sysctl)
+//   2. proc_listpids(PROC_ALL_PIDS) 备选
+//   3. PID 暴力扫描 (task_for_pid + proc_name)
 static pid_t find_pid_by_name_multi(const char **names) {
-    // proc_listallpids 返回的 PID 数组, 1024 个够用
     int pidbuf[1024];
-    int npids = proc_listallpids(pidbuf, sizeof(pidbuf));
-
+    int npids = 0;
     static BOOL dumpedOnce = NO;
 
+    // === 方法1: proc_listallpids ===
+    errno = 0;
+    npids = proc_listallpids(pidbuf, sizeof(pidbuf));
+    hooks_log(@"proc_listallpids: ret=%d errno=%d bufsize=%zu",
+              npids, errno, sizeof(pidbuf));
+
+    // === 方法2: proc_listpids (fallback) ===
     if (npids <= 0) {
-        hooks_log(@"proc_listallpids failed: %d (%s)", npids, strerror(errno));
-        return -1;
+        hooks_log(@"proc_listallpids returned %d, trying proc_listpids...", npids);
+        errno = 0;
+        npids = proc_listpids(1 /* PROC_ALL_PIDS */, 0, pidbuf, sizeof(pidbuf));
+        hooks_log(@"proc_listpids: ret=%d errno=%d", npids, errno);
+    }
+
+    // === 方法3: PID 暴力扫描 ===
+    if (npids <= 0) {
+        hooks_log(@"libproc enumeration failed, falling back to PID brute force...");
+        pid_t bf_found = -1;
+        int scanned = 0, success = 0;
+        // 游戏进程通常在 300-1500 范围
+        for (pid_t p = 100; p < 2000; p++) {
+            mach_port_t testTask = MACH_PORT_NULL;
+            if (task_for_pid(mach_task_self(), p, &testTask) != KERN_SUCCESS) {
+                continue;
+            }
+            success++;
+            // task_for_pid 成功后必须释放端口
+            mach_port_deallocate(mach_task_self(), testTask);
+
+            char pname[64] = {0};
+            proc_name(p, pname, sizeof(pname) - 1);
+            if (pname[0] == '\0') continue;
+            scanned++;
+
+            for (const char **n = names; *n; n++) {
+                if (strcasecmp(pname, *n) == 0) {
+                    bf_found = p;
+                    hooks_log(@"Brute force found: '%s' PID=%d (matched '%s', scanned=%d success=%d)",
+                              [NSString stringWithUTF8String:pname], p,
+                              [NSString stringWithUTF8String:*n], scanned, success);
+                    return bf_found;
+                }
+            }
+            // 子串匹配兜底
+            if (strcasestr(pname, "delta") || strcasestr(pname, "dfm") ||
+                strcasestr(pname, "tmgp") || strcasestr(pname, "force")) {
+                bf_found = p;
+                hooks_log(@"Brute force substring: '%s' PID=%d (scanned=%d success=%d)",
+                          [NSString stringWithUTF8String:pname], p, scanned, success);
+                return bf_found;
+            }
+        }
+        hooks_log(@"PID brute force exhausted: scanned=%d task_for_pid_success=%d",
+                  scanned, success);
+        return bf_found;
     }
 
     int count = npids;
@@ -106,7 +151,6 @@ static pid_t find_pid_by_name_multi(const char **names) {
 
     pid_t found = -1;
 
-    // 精确匹配候选名
     for (int i = 0; i < count; i++) {
         char pname[64] = {0};
         proc_name(pidbuf[i], pname, sizeof(pname) - 1);
@@ -123,7 +167,6 @@ static pid_t find_pid_by_name_multi(const char **names) {
         }
     }
 
-    // 子串匹配 (兜底)
     for (int i = 0; i < count; i++) {
         char pname[64] = {0};
         proc_name(pidbuf[i], pname, sizeof(pname) - 1);
