@@ -139,8 +139,7 @@ int main(int argc, char *argv[]) {
     uint32_t sz = (uint32_t)sizeof(exePath);
     if (_NSGetExecutablePath(exePath, &sz) == 0) {
         NSString *exeStr = [NSString stringWithUTF8String:exePath];
-        NSString *fwDir = [[[exeStr stringByDeletingLastPathComponent]
-                           stringByDeletingPathExtension]
+        NSString *fwDir = [[exeStr stringByDeletingLastPathComponent]
                           stringByAppendingPathComponent:@"Frameworks"];
         NSString *dylibPath = [fwDir stringByAppendingPathComponent:@"libjailbreak.dylib"];
 
