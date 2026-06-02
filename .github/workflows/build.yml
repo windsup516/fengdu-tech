@@ -18,7 +18,6 @@ jobs:
       - name: Prepare CJK Font
         run: |
           mkdir -p Resources
-          # 优先用项目自带字体, 否则下载思源黑体 (~8MB)
           if [ -f "Resources/CJKFont.ttc" ] || [ -f "Resources/CJKFont.otf" ]; then
             echo "Font already in Resources/, skipping download"
             ls -lh Resources/
@@ -39,12 +38,10 @@ jobs:
             git clone --depth 1 --recursive https://github.com/theos/theos.git /tmp/theos
           fi
           echo "THEOS=/tmp/theos" >> $GITHUB_ENV
-          # Theos 新版不自带 ldid，需手动下载 ldid2 (Procursus fork)
           curl -L --retry 5 --retry-delay 5 \
             -o /tmp/theos/bin/ldid \
             "https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_x86_64"
           chmod +x /tmp/theos/bin/ldid
-          # 移除 macOS 隔离标记，否则 Gatekeeper 会 SIGKILL
           xattr -d com.apple.quarantine /tmp/theos/bin/ldid 2>/dev/null || true
           /tmp/theos/bin/ldid --version || true
 
@@ -75,36 +72,109 @@ jobs:
           make clean 2>/dev/null || true
           make package FINAL_PACKAGE=1
 
-      - name: Verify entitlements embedded in binary
+      # ====== 诊断1: 构建工具信息 ======
+      - name: "DIAG - Signing tools"
         run: |
-          set +e
-          echo "=== Checking embedded entitlements ==="
-          TIPA_PATH="${{ github.workspace }}/packages/Stocks.tipa"
-          if [ ! -f "$TIPA_PATH" ]; then
-            echo "ERROR: $TIPA_PATH not found!"
-            ls -la "${{ github.workspace }}/packages/" 2>/dev/null || echo "packages/ dir missing"
+          echo "=== Signing tools ==="
+          echo "PATH=$PATH"
+          echo "THEOS=$THEOS"
+          echo ""
+          echo "--- ldid ---"
+          LSD=/tmp/theos/bin/ldid
+          if [ -x "$LSD" ]; then
+            echo "ldid path: $LSD"
+            "$LSD" --version 2>&1 || echo "(no --version)"
+          else
+            echo "ldid NOT at $LSD"
+          fi
+          echo ""
+          echo "--- codesign ---"
+          which codesign 2>&1 || echo "codesign not in PATH"
+          codesign -v 2>&1 || true
+          echo ""
+          echo "--- ldid in PATH ---"
+          which ldid 2>&1 || echo "ldid not in PATH"
+
+      # ====== 诊断2: Theos staging (.theos/obj) 的 entitlements ======
+      - name: "DIAG - Theos staging (.theos obj) entitlements"
+        run: |
+          echo "=== .theos/obj/Stocks.app/Stocks ==="
+          THEOS_BIN=".theos/obj/Stocks.app/Stocks"
+          if [ -f "$THEOS_BIN" ]; then
+            echo "Binary: EXISTS ($(wc -c < "$THEOS_BIN") bytes)"
+            echo ""
+            echo "--- ldid -e (entitlements) ---"
+            /tmp/theos/bin/ldid -e "$THEOS_BIN" 2>&1 || echo "ldid -e FAILED"
+            echo ""
+            echo "--- grep for task_for_pid ---"
+            strings "$THEOS_BIN" 2>/dev/null | grep -c "task_for_pid-allow" || echo "NOT FOUND IN STRINGS"
+          else
+            echo "BINARY NOT FOUND"
+            echo "Searching for Stocks binary in .theos..."
+            find .theos -name "Stocks" -type f 2>/dev/null | head -10 || echo "(no .theos dir)"
+            echo ""
+            echo "Contents of .theos:"
+            ls -la .theos/ 2>/dev/null || echo "(no .theos)"
+            ls -la .theos/obj/ 2>/dev/null || echo "(no .theos/obj)"
+          fi
+
+      # ====== 诊断3: 最终 Payload 的 entitlements (从 tipa 解压) ======
+      - name: "DIAG -Final Payload entitlements (from tipa)"
+        run: |
+          echo "=== Final Payload/Stocks.app/Stocks ==="
+          TIPA="${{ github.workspace }}/packages/Stocks.tipa"
+          if [ ! -f "$TIPA" ]; then
+            echo "TIPA NOT FOUND at $TIPA"
+            echo "Checking packages dir:"
+            ls -la "${{ github.workspace }}/packages/" 2>/dev/null || echo "(no packages dir)"
             exit 0
           fi
-          THEOS_LDID=$(ls /tmp/theos/bin/ldid* 2>/dev/null | head -1)
-          if [ -z "$THEOS_LDID" ]; then THEOS_LDID=$(which ldid 2>/dev/null); fi
-          echo "Using ldid: $THEOS_LDID"
-          mkdir -p /tmp/verify_ent
-          cd /tmp/verify_ent
-          unzip -o "$TIPA_PATH" Payload/Stocks.app/Stocks 2>&1 || { echo "unzip failed"; exit 0; }
-          echo "Entitlements in Stocks binary:"
-          if [ -x "$THEOS_LDID" ]; then
-            ENTS=$("$THEOS_LDID" -e Payload/Stocks.app/Stocks 2>&1)
-            echo "$ENTS"
-            if ! echo "$ENTS" | grep -q "task_for_pid-allow"; then
-              echo "FATAL: task_for_pid-allow NOT in final tipa binary!"
-            else
-              echo "OK: task_for_pid-allow confirmed in tipa"
-            fi
+          echo "TIPA found: $(wc -c < "$TIPA") bytes"
+          mkdir -p /tmp/final_check
+          cd /tmp/final_check
+          rm -rf Payload
+          unzip -o "$TIPA" "Payload/Stocks.app/Stocks" "Payload/Stocks.app/_CodeSignature/*" 2>&1
+          echo ""
+          echo "--- ldid -e (entitlements) ---"
+          /tmp/theos/bin/ldid -e "Payload/Stocks.app/Stocks" 2>&1 || echo "ldid -e FAILED"
+          echo ""
+          echo "--- grep for task_for_pid ---"
+          strings "Payload/Stocks.app/Stocks" 2>/dev/null | grep -c "task_for_pid-allow" || echo "NOT FOUND IN STRINGS"
+          echo ""
+          echo "--- _CodeSignature ---"
+          if [ -d "Payload/Stocks.app/_CodeSignature" ]; then
+            echo "_CodeSignature EXISTS:"
+            ls -la "Payload/Stocks.app/_CodeSignature/"
           else
-            echo "ldid not executable, trying codesign..."
-            codesign -d --entitlements :- Payload/Stocks.app/Stocks 2>&1 || echo "Neither ldid nor codesign available"
+            echo "_CodeSignature MISSING"
           fi
-          echo "=== Verify complete ==="
+          echo ""
+          echo "--- Payload directory listing ---"
+          ls -la "Payload/Stocks.app/" 2>/dev/null | head -20
+          ls -la "Payload/Stocks.app/Frameworks/" 2>/dev/null || echo "(no Frameworks)"
+
+      # ====== 诊断4: 两个阶段的 binary hash 对比 ======
+      - name: "DIAG -Binary hash comparison (staging vs final)"
+        run: |
+          echo "=== Binary SHA256 comparison ==="
+          STAGING=".theos/obj/Stocks.app/Stocks"
+          if [ -f "$STAGING" ]; then
+            H1=$(shasum -a 256 "$STAGING" | awk '{print $1}')
+            echo "staging (.theos/obj): $H1"
+          else
+            echo "staging (.theos/obj): NOT FOUND"
+          fi
+          echo ""
+          mkdir -p /tmp/hash_check
+          cd /tmp/hash_check
+          rm -rf Payload
+          unzip -o "${{ github.workspace }}/packages/Stocks.tipa" "Payload/Stocks.app/Stocks" 2>&1
+          if [ -f "Payload/Stocks.app/Stocks" ]; then
+            H2=$(shasum -a 256 "Payload/Stocks.app/Stocks" | awk '{print $1}')
+            echo "final   (tipa Payload): $H2"
+          else
+            echo "final   (tipa Payload): NOT FOUND"
+          fi
 
       - name: Upload Stocks.tipa
         uses: actions/upload-artifact@v4
