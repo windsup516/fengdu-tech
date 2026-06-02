@@ -158,23 +158,14 @@ static void resolve_dylib_functions(void) {
              (void*)dylib_kern_reading, (void*)dylib_kern_writing,
              (void*)dylib_kcall, (void*)dylib_kalloc, (void*)dylib_physread64);
 
-    // === 测试 dylib 内核原语 ===
-    if (dylib_kern_reading && dylib_kalloc) {
-        SAFE_LOG("Dylib exploit primitives available — testing...");
-
-        // 尝试内核读: 通过 kalloc 分配内存，然后 kern_reading 读回来
-        // 这里用 kalloc 的实际签名: void* kalloc(uint64_t size)
-        void *test_alloc = dylib_kalloc(0x100);
-        SAFE_LOG("Dylib kalloc test: ptr=%p", test_alloc);
-
-        if (dylib_kcall) {
-            // 测试 kcall: 尝试调用一个无害的内核函数
-            // 这个需要知道 gadget 偏移，先打印诊断
-            SAFE_LOG("Dylib kcall available — sandbox escape feasible");
-        }
+    // 不在此处调用 kalloc/kern_reading —— dylib 可能未初始化 (无 jb_init)
+    // 调用未初始化的内核原语 = segfault
+    // 这些指针在 get_task_port / game_read 中用到时会自动走 dylib 路径
+    if (dylib_kcall && dylib_kern_reading) {
+        SAFE_LOG("Dylib kernel r/w available — WEAK stubs will route through dylib");
     } else {
-        SAFE_LOG("Dylib exploit primitives INCOMPLETE: kern_reading=%p kalloc=%p",
-                 (void*)dylib_kern_reading, (void*)dylib_kalloc);
+        SAFE_LOG("Dylib primitives partial: kcall=%p kern_reading=%p kalloc=%p",
+                 (void*)dylib_kcall, (void*)dylib_kern_reading, (void*)dylib_kalloc);
     }
 
     if (!real_jb_init) {
