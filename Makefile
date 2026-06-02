@@ -65,7 +65,20 @@ after-package::
 	@echo "==> 打包 Stocks.tipa for TrollStore..."
 	@rm -rf /tmp/Stocks.tipa.work
 	@mkdir -p /tmp/Stocks.tipa.work/Payload/Stocks.app
-	@cp -rL $(THEOS_STAGING_DIR)/Applications/Stocks.app/* /tmp/Stocks.tipa.work/Payload/Stocks.app/
+	@echo "THEOS_STAGING_DIR=$(THEOS_STAGING_DIR)"
+	@if [ -d "$(THEOS_STAGING_DIR)/Applications/Stocks.app" ]; then \
+		echo "Staging source: $(THEOS_STAGING_DIR)/Applications/Stocks.app"; \
+		cp -rL "$(THEOS_STAGING_DIR)/Applications/Stocks.app/"* /tmp/Stocks.tipa.work/Payload/Stocks.app/; \
+	elif [ -d ".theos/obj/Stocks.app" ]; then \
+		echo "Staging source (fallback): .theos/obj/Stocks.app"; \
+		cp -rL .theos/obj/Stocks.app/* /tmp/Stocks.tipa.work/Payload/Stocks.app/; \
+	else \
+		echo "FATAL: No staging dir found! Tried THEOS_STAGING_DIR and .theos/obj/"; \
+		exit 1; \
+	fi
+	@echo "App bundle contents:"
+	@ls -la /tmp/Stocks.tipa.work/Payload/Stocks.app/Stocks 2>/dev/null || echo "  Stocks binary MISSING!"
+	@ls -la /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/ 2>/dev/null || echo "  Frameworks/ MISSING"
 	@# === 编译 + 捆绑 RootHelper ===
 	@echo "==> Compiling RootHelper..."
 	@CLANG=$$(which clang 2>/dev/null || echo ""); \
