@@ -488,6 +488,87 @@ scan_all_offsets()
 
 ---
 
+## 21. iOS Mach-O 段布局导致 GWorld 扫描全部失败
+
+**问题**: GWorld 扫描同时失败：
+```
+GWorld not found in DATA segments 
+GWorld TEXT scan: no candidate with >=3 refs (best=0, pairs=0)
+```
+
+两套策略都找不到任何候选——根本原因是假设 macOS/Linux 的段布局，忽略了 iOS 的关键差异。
+
+**根因**:
+
+### iOS 段布局(Apple Clang) vs macOS/Linux (GCC/Clang):
+
+```
+Apple Clang (iOS):
+  __TEXT            → 纯代码, 不含 vtable
+  __DATA_CONST      → C++ vtables + GOT entries (只读)
+  __AUTH_CONST      → arm64e 签名 vtables + GOT (只读)
+  __DATA            → 可写全局变量
+  __BSS             → 零初始化全局变量 (GWorld 可能在这里)
+
+GCC/Linux Clang:
+  __TEXT / .text    → 代码 + vtable (部分编译器放这里)
+  __DATA / .data    → 全局变量 + vtable
+  __BSS / .bss       → 零初始化全局变量
+```
+
+### 三个致命假设:
+
+1. **Vtable ∈ TEXT (错误)**: 原来检查 `vtable < text_start || vtable >= text_end` 要求 vtable 在 **TEXT** 段。但 iOS 上 C++ vtable 在 __DATA_CONST 或 __AUTH_CONST。这导致 **所有真正的 UE4 UObject 都被拒绝**。
+
+2. **ADRP+LDR 直接引用全局变量 (不完整)**: macOS/Linux 上 `ADRP X, #page; LDR X, [X, #off]` 直接加载全局变量地址。但 iOS 使用 **GOT 间接访问**: `ADRP+LDR` → GOT entry (**__DATA_CONST**) → 全局变量地址 (**__DATA/BSS**) → 堆指针。原来的扫描只做一级间接，GOT entry 值(指向 DATA/BSS)被 `is_valid_heap_ptr()` 拒绝。
+
+3. **所有数据段混在一起 (粗粒度)**: __DATA_CONST、__AUTH_CONST、__DATA、__BSS、__DATA_DIRTY 全放入同一个数组,无法区分只读常量(vtable/GOT)和可写全局变量(GWorld)。
+
+### 修复:
+
+**Segment 分类**:
+```c
+// 区分三种段类型
+find_segments() {
+    if (segname == "__TEXT")                     → text_start/end
+    if (segname == "__DATA_CONST" || "__AUTH_CONST") → const_starts/ends (只读)
+    if (segname == "__DATA" || "__BSS" || "__DATA_DIRTY") → data_starts/ends (可写)
+}
+```
+
+**Vtable 验证**允许 TEXT + 只读常量段:
+```c
+BOOL is_valid_vtable(vtable) {
+    if (vtable ∈ __TEXT) return YES;
+    if (vtable ∈ __DATA_CONST) return YES;   // ← iOS 关键!
+    if (vtable ∈ __AUTH_CONST) return YES;   // ← arm64e 关键!
+    return NO;
+}
+```
+
+**GOT 间接处理**:
+```c
+// ADRP+LDR target 在 __DATA_CONST → GOT entry
+// 读 GOT entry → 全局变量地址 → 读全局变量 → 堆指针
+if (target ∈ const_segments) {
+    got_value = *target;              // GOT entry → &GWorld
+    if (got_value ∈ data_segments)    // &GWorld 在 DATA/BSS
+        pointed = *got_value;         // *GWorld → UWorld* (heap)
+}
+```
+
+**新增指令模式**:
+- ADRP+ADD+LDR: 编译器有时在 ADRP 和 LDR 之间插入 ADD 做页面内偏移
+- MOVZ+MOVK+LDR: 某些情况下编译器用绝对地址构建 + LDR
+
+**通用原则**:
+1. **iOS 和 macOS 的 Mach-O 段布局不同**。Apple Clang 把 C++ vtable 放在 __DATA_CONST（有时是 __AUTH_CONST），不在 __TEXT。
+2. **iOS 使用 GOT 做位置无关代码**。全局变量访问走 GOT 间接(两跳: GOT→var_addr→value)，不是直接 ADRP+LDR→value。
+3. **区分只读段和可写段是关键**。只读段包含 vtable + GOT；可写段包含 GWorld 等全局变量。混在一起会同时破坏两种扫描策略。
+4. **多指令模式覆盖**。编译器对同一个逻辑可能生成不同指令序列(ADRP+LDR、ADRP+ADD+LDR、MOVZ+MOVK+LDR)，每种都可能被用于访问 GWorld。漏一种模式=漏掉整个扫描。
+
+---
+
 ## 20. GWorld 扫描误报 — 验证链太弱导致假阳性
 
 **问题**: 扫描成功返回 `GWorld found in DATA: addr=0x110ea33a0 -> UWorld=0x110ea3360 score=56`，但实际是假阳性：
