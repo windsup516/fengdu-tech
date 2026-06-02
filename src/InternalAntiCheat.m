@@ -51,13 +51,34 @@ static int bypass_ptrace_deny_attach(void) {
     }
 
     // 方法3: 使用 task_swap_exception_ports 移除调试端口
-    task_swap_exception_ports(mach_task_self(),
-                               EXC_MASK_ALL,
-                               MACH_PORT_NULL,
-                               EXCEPTION_DEFAULT,
-                               THREAD_STATE_NONE,
-                               NULL, 0,
-                               NULL, NULL);
+    exception_mask_t oldMasks[EXC_TYPES_COUNT];
+    mach_msg_type_number_t oldMasksCnt = 0;
+    exception_handler_t oldHandlers[EXC_TYPES_COUNT];
+    exception_behavior_t oldBehaviors[EXC_TYPES_COUNT];
+    thread_state_flavor_t oldFlavors[EXC_TYPES_COUNT];
+
+    // 先查询已有的异常端口
+    kern_return_t kr = task_get_exception_ports(mach_task_self(),
+                                                 EXC_MASK_ALL,
+                                                 oldMasks,
+                                                 &oldMasksCnt,
+                                                 oldHandlers,
+                                                 oldBehaviors,
+                                                 oldFlavors);
+
+    if (kr == KERN_SUCCESS && oldMasksCnt > 0) {
+        task_swap_exception_ports(mach_task_self(),
+                                   EXC_MASK_ALL,
+                                   MACH_PORT_NULL,
+                                   EXCEPTION_DEFAULT,
+                                   THREAD_STATE_NONE,
+                                   oldMasks,
+                                   &oldMasksCnt,
+                                   oldHandlers,
+                                   oldBehaviors,
+                                   oldFlavors);
+        AC_LOG(@"Removed debug exception ports (count=%u)", oldMasksCnt);
+    }
 
     AC_LOG(@"ptrace bypass complete");
     return 0;
