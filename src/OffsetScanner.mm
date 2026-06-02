@@ -694,12 +694,6 @@ static uint64_t scan_gworld_text_chunked(mach_port_t task, uint64_t text_start, 
             if (refs > best_refs) {
                 best_refs = refs;
                 best_addr = target;
-                if (refs >= 5) {
-                    HOOKS_LOG(@"GWorld TEXT hit: *0x%llx=0x%llx refs=%d via %s%s",
-                              target, pointed, refs,
-                              in_const ? "GOT" : "DATA",
-                              from_movz ? "+MOVZ" : "");
-                }
             }
         }
 
