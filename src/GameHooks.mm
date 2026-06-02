@@ -94,59 +94,56 @@ static pid_t find_pid_by_name_multi(const char **names) {
         hooks_log(@"proc_listpids: ret=%d errno=%d", npids, errno);
     }
 
-    // === 方法3: PID 暴力扫描 ===
+    // === 方法3: PID 暴力扫描 (proc_pidpath / proc_name) ===
+    // task_for_pid 在此环境被完全封堵(kr=5), 改用 libproc 单点查询
     if (npids <= 0) {
-        hooks_log(@"libproc enumeration failed, falling back to PID brute force...");
+        hooks_log(@"libproc enumeration failed, falling back to PID brute force (proc_pidpath)...");
 
-        // 先自测: task_for_pid 对自身 PID 能否成功
+        // 自测: proc_pidpath 对 PID 1 是否可用
         {
-            mach_port_t selfTask = MACH_PORT_NULL;
-            kern_return_t selfKr = task_for_pid(mach_task_self(), getpid(), &selfTask);
-            hooks_log(@"Brute force self-test: task_for_pid(%d) kr=%d task=%x",
-                      getpid(), selfKr, selfTask);
-            if (selfTask != MACH_PORT_NULL) {
-                mach_port_deallocate(mach_task_self(), selfTask);
-            }
+            char testPath[PROC_PIDPATHINFO_MAXSIZE] = {0};
+            errno = 0;
+            int testRet = proc_pidpath(1, testPath, sizeof(testPath));
+            hooks_log(@"Brute force self-test: proc_pidpath(1) ret=%d errno=%d path=%s",
+                      testRet, errno, testRet > 0 ? testPath : "(fail)");
         }
 
         pid_t bf_found = -1;
-        int scanned = 0, success = 0;
-        int firstSuccessPid = -1;
-        // 从 PID 1 开始扫, 范围扩大到 3000
-        for (pid_t p = 1; p < 3000; p++) {
-            mach_port_t testTask = MACH_PORT_NULL;
-            kern_return_t kr = task_for_pid(mach_task_self(), p, &testTask);
-            if (kr != KERN_SUCCESS) {
-                continue;
-            }
-            success++;
-            if (firstSuccessPid < 0) firstSuccessPid = p;
-            mach_port_deallocate(mach_task_self(), testTask);
+        int scanned = 0, pathOk = 0;
 
-            char pname[64] = {0};
-            proc_name(p, pname, sizeof(pname) - 1);
-            if (pname[0] == '\0') continue;
+        for (pid_t p = 1; p < 3000; p++) {
+            // 先用 proc_pidpath 测试 PID 是否存在 (不依赖 task_for_pid)
+            char ppath[PROC_PIDPATHINFO_MAXSIZE] = {0};
+            int ppRet = proc_pidpath(p, ppath, sizeof(ppath));
+            if (ppRet <= 0) continue;
+            pathOk++;
+
+            // 从路径提取进程名 (最后一段去掉 .app/ 后的可执行文件名)
+            NSString *fullPath = [NSString stringWithUTF8String:ppath];
+            NSString *execName = [[fullPath lastPathComponent] stringByDeletingPathExtension];
+            const char *pname = [execName UTF8String];
+            if (!pname || pname[0] == '\0') continue;
             scanned++;
 
+            // 精确匹配所有候选名
             for (const char **n = names; *n; n++) {
                 if (strcasecmp(pname, *n) == 0) {
                     bf_found = p;
-                    hooks_log(@"Brute force found: '%s' PID=%d (matched '%s', scanned=%d success=%d firstOk=%d)",
-                              [NSString stringWithUTF8String:pname], p,
-                              [NSString stringWithUTF8String:*n], scanned, success, firstSuccessPid);
+                    hooks_log(@"Brute force proc_pidpath found: '%s' PID=%d (scanned=%d pathOk=%d)",
+                              pname, p, scanned, pathOk);
                     return bf_found;
                 }
             }
+            // 子串匹配兜底
             if (strcasestr(pname, "delta") || strcasestr(pname, "dfm") ||
                 strcasestr(pname, "tmgp") || strcasestr(pname, "force")) {
                 bf_found = p;
-                hooks_log(@"Brute force substring: '%s' PID=%d (scanned=%d success=%d firstOk=%d)",
-                          [NSString stringWithUTF8String:pname], p, scanned, success, firstSuccessPid);
+                hooks_log(@"Brute force proc_pidpath substring: '%s' PID=%d (scanned=%d pathOk=%d)",
+                          pname, p, scanned, pathOk);
                 return bf_found;
             }
         }
-        hooks_log(@"PID brute force exhausted: scanned=%d task_for_pid_success=%d firstSuccessPid=%d",
-                  scanned, success, firstSuccessPid);
+        hooks_log(@"PID brute force exhausted: scanned=%d proc_pidpath_ok=%d", scanned, pathOk);
         return bf_found;
     }
 
@@ -208,9 +205,13 @@ int hooks_attach_to_game(void) {
     g_gamePid = pid;
     kern_return_t kr = task_for_pid(mach_task_self(), pid, &g_gameTask);
     if (kr != KERN_SUCCESS) {
-        hooks_log(@"task_for_pid(%d) failed: %d (need entitlement)", pid, kr);
-        g_gameTask = MACH_PORT_NULL;
-        return -2;
+        hooks_log(@"task_for_pid(%d) failed: %d, trying kernel task attach...", pid, kr);
+        kr = xpf_attach_kernel_task((uint64_t)pid, &g_gameTask);
+        if (kr != KERN_SUCCESS || g_gameTask == MACH_PORT_NULL) {
+            hooks_log(@"kernel task attach also failed: %d task=%x", kr, g_gameTask);
+            g_attached = YES;
+            return 0;
+        }
     }
 
     g_attached = YES;

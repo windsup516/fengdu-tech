@@ -422,12 +422,20 @@ static void install_crash_handlers(void) {
             mach_port_deallocate(mach_task_self(), selfTask);
         }
 
-        // 测试3: task_for_pid 测几个系统 PID (1=launchd, 典型后台进程)
-        for (int tp = 1; tp <= 10; tp++) {
+        // 测试3: proc_pidpath 对 PID 1 (launchd) — 不同内核路径
+        {
+            char p1buf[PROC_PIDPATHINFO_MAXSIZE] = {0};
+            errno = 0;
+            int p1Ret = proc_pidpath(1, p1buf, sizeof(p1buf));
+            SAFE_LOG("Test3 proc_pidpath(1): ret=%d errno=%d path=%s", p1Ret, errno, p1Ret > 0 ? p1buf : "(fail)");
+        }
+
+        // 测试3b: task_for_pid 测几个系统 PID
+        for (int tp = 1; tp <= 5; tp++) {
             mach_port_t t = MACH_PORT_NULL;
             kern_return_t kr = task_for_pid(mach_task_self(), tp, &t);
             if (kr == KERN_SUCCESS) {
-                SAFE_LOG("Test3 task_for_pid(%d): SUCCESS task=%x", tp, t);
+                SAFE_LOG("Test3b task_for_pid(%d): SUCCESS task=%x", tp, t);
                 mach_port_deallocate(mach_task_self(), t);
             }
         }
