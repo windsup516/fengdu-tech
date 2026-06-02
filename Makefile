@@ -44,7 +44,7 @@ Stocks_CCFLAGS = -std=c++17 -stdlib=libc++ -Iinclude -Iinclude/imgui -Iinclude/i
 Stocks_LDFLAGS = -lz -lobjc -framework UIKit -framework Metal \
 	-framework MetalKit -framework CoreGraphics \
 	-framework Foundation -framework CoreText \
-	-framework IOSurface -framework IOKit
+	-framework IOSurface -framework IOKit -framework Security
 
 # 强制使用 ldid 签名 (不用 codesign，因为 codesign 会拒绝自定义 entitlement)
 # sign.plist 包含 task_for_pid-allow 等 TrollStore 专用权限

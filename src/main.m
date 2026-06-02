@@ -12,6 +12,8 @@
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import <objc/message.h>
+#import <Security/SecTask.h>
+#import <CommonCrypto/CommonDigest.h>
 #import "LoginViewController.h"
 #import "AppViewController.h"
 #import "HUDController.h"
@@ -406,6 +408,64 @@ static void install_crash_handlers(void) {
     if (hud.windowsCreated) {
         [hud show];
         SAFE_LOG("HUD overlay started");
+    }
+
+    // ====== 诊断0: 运行时 binary hash (确认手机上的二进制 == CI artifact) ======
+    {
+        NSString *exePath = [[NSBundle mainBundle] executablePath];
+        NSData *exeData = [NSData dataWithContentsOfFile:exePath];
+        if (exeData) {
+            unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+            CC_SHA256(exeData.bytes, (CC_LONG)exeData.length, hash);
+            NSMutableString *hs = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH*2];
+            for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) [hs appendFormat:@"%02x", hash[i]];
+            SAFE_LOG("Binary SHA256: %s", [hs UTF8String]);
+            SAFE_LOG("Expected CI:   898d50fcebfaa78cdb95b59aa1aeae5ce1ca7b8f26705a242d29834b51202cef");
+            BOOL match = [hs isEqualToString:@"898d50fcebfaa78cdb95b59aa1aeae5ce1ca7b8f26705a242d29834b51202cef"];
+            SAFE_LOG("Binary match CI: %s", match ? "YES" : "NO (different binary!)");
+        } else {
+            SAFE_LOG("Binary SHA256: FAILED to read executable at %s", [exePath UTF8String]);
+        }
+    }
+
+    // ====== 诊断0b: SecTaskCopyValueForEntitlement (内核是否承认这些权限) ======
+    {
+        SAFE_LOG("=== SecTask runtime entitlement check ===");
+        SecTaskRef task = SecTaskCreateFromSelf(NULL);
+        if (!task) {
+            SAFE_LOG("SecTaskCreateFromSelf: FAILED");
+        } else {
+            NSArray *keys = @[
+                @"get-task-allow",
+                @"task_for_pid-allow",
+                @"com.apple.system-task-ports",
+                @"com.apple.security.cs.debugger",
+                @"com.apple.security.cs.disable-library-validation",
+                @"com.apple.private.skip-library-validation",
+                @"com.apple.private.security.no-sandbox",
+                @"com.apple.private.security.no-container",
+                @"platform-application",
+            ];
+            for (NSString *k in keys) {
+                CFTypeRef val = SecTaskCopyValueForEntitlement(task, (__bridge CFStringRef)k, NULL);
+                if (val) {
+                    if (CFGetTypeID(val) == CFBooleanGetTypeID()) {
+                        SAFE_LOG("  %s = %s", [k UTF8String], CFBooleanGetValue(val) ? "TRUE" : "FALSE");
+                    } else if (CFGetTypeID(val) == CFStringGetTypeID()) {
+                        SAFE_LOG("  %s = '%s'", [k UTF8String], [(__bridge NSString*)val UTF8String]);
+                    } else if (CFGetTypeID(val) == CFArrayGetTypeID()) {
+                        SAFE_LOG("  %s = <array %ld items>", [k UTF8String], (long)CFArrayGetCount(val));
+                    } else {
+                        SAFE_LOG("  %s = <type %lu>", [k UTF8String], (unsigned long)CFGetTypeID(val));
+                    }
+                    CFRelease(val);
+                } else {
+                    SAFE_LOG("  %s = (nil - NOT GRANTED)", [k UTF8String]);
+                }
+            }
+            CFRelease(task);
+        }
+        SAFE_LOG("=== SecTask check complete ===");
     }
 
     // 前台预检: 逐层诊断所有进程枚举 API
