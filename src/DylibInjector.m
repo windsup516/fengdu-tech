@@ -135,13 +135,13 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     // Step 8: Create remote thread with proper ARM state
     arm_thread_state64_t state;
     memset(&state, 0, sizeof(state));
-    state.pc = codeAddr;
-    state.sp = stackAddr;
-    state.fp = 0;
-    state.lr = 0;
-    state.x[0] = path;
-    state.x[1] = 2; // RTLD_NOW
-    state.cpsr = 0;
+    state.__pc = codeAddr;
+    state.__sp = stackAddr;
+    state.__fp = 0;
+    state.__lr = 0;
+    state.__x[0] = path;
+    state.__x[1] = 2; // RTLD_NOW
+    state.__cpsr = 0;
 
     thread_act_t remoteThread = MACH_PORT_NULL;
     kr = thread_create_running(remoteTask, ARM_THREAD_STATE64,
