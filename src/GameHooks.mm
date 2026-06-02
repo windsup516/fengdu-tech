@@ -284,7 +284,7 @@ int hooks_attach_to_game(void) {
 // Inject DFOverlay.dylib so Metal+ImGui overlay renders in game's process
 // Render context never dies because game is always foreground
 // Declare the injector function from DylibInjector.m
-extern int inject_dylib_to_pid(pid_t pid, const char *dylibName);
+extern "C" int inject_dylib_to_pid(pid_t pid, const char *dylibName);
 
 int hooks_inject_overlay_dylib(void) {
     if (!g_attached || g_gamePid <= 0) {
