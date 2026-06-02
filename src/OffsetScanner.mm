@@ -202,7 +202,6 @@ NSString *resolve_fname(mach_port_t task, uint64_t gameBase, uint32_t fnameIndex
     uint64_t gname_base = gameBase + 0x0EE5000; // 临时: 需替换为扫描结果
 
     // 读取 chunk table
-    uint64_t chunkTable = 0;
     uint32_t chunkIdx = fnameIndex / CHUNK_SIZE;
     uint32_t withinChunk = fnameIndex % CHUNK_SIZE;
 
@@ -673,7 +672,7 @@ static uint64_t scan_gworld_text_chunked(mach_port_t task, uint64_t text_start, 
                 best_refs = refs;
                 best_addr = target;
                 if (refs >= 3) {
-                    HOOKS_LOG(@"GWorld TEXT hit: *0x%llx=0x%llx refs=%d (pc=0x%llx %s%s)",
+                    HOOKS_LOG(@"GWorld TEXT hit: *0x%llx=0x%llx refs=%d (pc=0x%llx %s%s%s)",
                               target, pointed, refs, pc,
                               from_adrp ? "ADRP" : "", from_movz ? "MOVZ" : "",
                               in_const ? " via GOT" : "");
