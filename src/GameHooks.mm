@@ -274,9 +274,8 @@ int hooks_attach_to_game(void) {
     g_attached = YES;
     HOOKS_LOG(@"Attached PID=%d task=%x", pid, g_gameTask);
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        hooks_scan_offsets();
-    });
+    // Note: hooks_scan_offsets is called synchronously by main.m after attach
+    // Don't dispatch async here — causes duplicate scans
 
     return 0;
 }
@@ -285,6 +284,10 @@ int hooks_attach_to_game(void) {
 
 int hooks_scan_offsets(void) {
     if (g_gameTask == MACH_PORT_NULL) return -1;
+    if (g_scanned_offsets.scanned) {
+        HOOKS_LOG(@"Offsets already scanned, skipping");
+        return 0;
+    }
 
     uint64_t gameBase = hooks_get_game_base();
     if (!gameBase) { HOOKS_LOG(@"Cannot find game base"); return -1; }
@@ -298,9 +301,7 @@ int hooks_scan_offsets(void) {
     if (scanResult == 0 && g_scanned_offsets.gworld_found) {
         // === GWorld 扫描成功 — 用扫描结果 ===
         uint64_t gworld = 0;
-        { vm_size_t sz = sizeof(gworld);
-          vm_read_overwrite(g_gameTask, (vm_address_t)g_scanned_offsets.gworld_ptr,
-                            (vm_address_t)&gworld, &sz); }
+        game_read(g_gameTask, g_scanned_offsets.gworld_ptr, &gworld, sizeof(gworld));
 
         HOOKS_LOG(@"GWorld scanned: *0x%llx = 0x%llx", g_scanned_offsets.gworld_ptr, gworld);
 
@@ -313,27 +314,19 @@ int hooks_scan_offsets(void) {
         }
 
         // 尝试解析 LocalPlayer (从 UWorld + 0x38 → OwningGameInstance → LocalPlayers)
-        // UWorld + 0x38 → UGameInstance*
         uint64_t gameInstance = 0;
-        if (vm_read_overwrite(g_gameTask, (vm_address_t)(gworld + 0x38),
-                              (vm_address_t)&gameInstance, sizeof(gameInstance), NULL) == KERN_SUCCESS) {
+        if (game_read(g_gameTask, gworld + 0x38, &gameInstance, sizeof(gameInstance)) == KERN_SUCCESS) {
             if (gameInstance) {
-                // UGameInstance + 0x38 → LocalPlayers TArray
                 uint64_t lpArray = 0;
                 int32_t lpCount = 0;
-                vm_read_overwrite(g_gameTask, (vm_address_t)(gameInstance + 0x38),
-                                  (vm_address_t)&lpArray, sizeof(lpArray), NULL);
-                vm_read_overwrite(g_gameTask, (vm_address_t)(gameInstance + 0x38 + 8),
-                                  (vm_address_t)&lpCount, sizeof(lpCount), NULL);
+                game_read(g_gameTask, gameInstance + 0x38, &lpArray, sizeof(lpArray));
+                game_read(g_gameTask, gameInstance + 0x38 + 8, &lpCount, sizeof(lpCount));
                 if (lpArray && lpCount > 0) {
                     uint64_t firstLP = 0;
-                    vm_read_overwrite(g_gameTask, (vm_address_t)lpArray,
-                                      (vm_address_t)&firstLP, sizeof(firstLP), NULL);
+                    game_read(g_gameTask, lpArray, &firstLP, sizeof(firstLP));
                     if (firstLP) {
-                        // ULocalPlayer → PlayerController (+0x30)
                         uint64_t playerController = 0;
-                        vm_read_overwrite(g_gameTask, (vm_address_t)(firstLP + 0x30),
-                                          (vm_address_t)&playerController, sizeof(playerController), NULL);
+                        game_read(g_gameTask, firstLP + 0x30, &playerController, sizeof(playerController));
                         g_game_offsets.local_player = playerController;
                         HOOKS_LOG(@"PlayerController via UWorld: 0x%llx", playerController);
                     }
@@ -344,9 +337,8 @@ int hooks_scan_offsets(void) {
         // Camera Manager: PlayerController + 0x330
         if (g_game_offsets.local_player) {
             uint64_t camMgr = 0;
-            vm_read_overwrite(g_gameTask,
-                              (vm_address_t)(g_game_offsets.local_player + g_scanned_offsets.player_camera_manager),
-                              (vm_address_t)&camMgr, sizeof(camMgr), NULL);
+            game_read(g_gameTask, g_game_offsets.local_player + g_scanned_offsets.player_camera_manager,
+                      &camMgr, sizeof(camMgr));
             g_game_offsets.camera_manager = camMgr;
             HOOKS_LOG(@"CameraManager via PC: 0x%llx", camMgr);
         }
@@ -371,17 +363,13 @@ int hooks_scan_offsets(void) {
 
     HOOKS_LOG(@"Offsets initialized (base=0x%llx scanned=%d)", gameBase, g_scanned_offsets.scanned);
 
-    // === Phase 3: 运行时验证 — 测试读 UWorld 看是否合理 ===
+    // === Phase 3: 运行时验证 ===
     if (g_scanned_offsets.gworld_found) {
         uint64_t gworld = 0;
-        { vm_size_t sz = sizeof(gworld);
-          vm_read_overwrite(g_gameTask, (vm_address_t)g_scanned_offsets.gworld_ptr,
-                            (vm_address_t)&gworld, &sz); }
+        game_read(g_gameTask, g_scanned_offsets.gworld_ptr, &gworld, sizeof(gworld));
         if (gworld) {
             uint64_t pl = 0;
-            { vm_size_t sz = sizeof(pl);
-              vm_read_overwrite(g_gameTask, (vm_address_t)(gworld + 0x30),
-                                (vm_address_t)&pl, &sz); }
+            game_read(g_gameTask, gworld + 0x30, &pl, sizeof(pl));
             HOOKS_LOG(@"Validation: UWorld=0x%llx PersistentLevel=0x%llx", gworld, pl);
         }
     }

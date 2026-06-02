@@ -102,35 +102,31 @@ WEAK_STUB kern_return_t kern_writing(mach_port_t task, uint64_t addr, void *buf,
 #pragma mark - 越狱初始化 (jb_init)
 
 // 安全版本: 检测环境,不调用危险操作
+// 重要: TrollStore 下不需要 jb_init 做任何事
+// kern_reading/kern_writing 的 WEAK stub 直接用 vm_read_overwrite/vm_write
+// 配合 task_for_pid-allow 就能读写游戏内存
 WEAK_STUB int jb_init(void) {
     int env = detect_environment();
 
-    if (env == 2) {
-        fprintf(stderr, "[Stubs] jb_init: jailbreak detected\n");
-        mach_port_t kt = MACH_PORT_NULL;
-        kern_return_t kr = task_for_pid(mach_task_self(), 0, &kt);
-        if (kr == KERN_SUCCESS && kt != MACH_PORT_NULL) {
-            mach_port_deallocate(mach_task_self(), kt);
-            return 0;
-        }
-        return 0;
+    switch (env) {
+        case 2: // 越狱
+            fprintf(stderr, "[Stubs] jb_init: jailbreak — attempting kernel_task\n");
+            {
+                mach_port_t kt = MACH_PORT_NULL;
+                if (task_for_pid(mach_task_self(), 0, &kt) == KERN_SUCCESS && kt != MACH_PORT_NULL) {
+                    fprintf(stderr, "[Stubs] jb_init: kernel_task=%x\n", kt);
+                    mach_port_deallocate(mach_task_self(), kt);
+                }
+            }
+            break;
+        case 1: // TrollStore
+            fprintf(stderr, "[Stubs] jb_init: TrollStore mode — using userspace Mach VM API\n");
+            fprintf(stderr, "[Stubs] jb_init: no kernel exploit needed, task_for_pid works via entitlement\n");
+            break;
+        default:
+            fprintf(stderr, "[Stubs] jb_init: normal sandboxed app — limited functionality\n");
+            break;
     }
-
-    if (env == 1) {
-        fprintf(stderr, "[Stubs] jb_init: TrollStore detected\n");
-        // 尝试获取 kernel_task (libjailbreak.dylib 的真实 exploit 可能在此工作)
-        mach_port_t kt = MACH_PORT_NULL;
-        kern_return_t kr = exploit_get_kernel_task(&kt);
-        if (kr == KERN_SUCCESS && kt != MACH_PORT_NULL) {
-            fprintf(stderr, "[Stubs] jb_init: kernel_task available in TS mode (task=%x)\n", kt);
-            // 不 deallocate — 保留给后续 kern_reading/kern_writing 使用
-        } else {
-            fprintf(stderr, "[Stubs] jb_init: TS mode, no kernel_task (userspace only)\n");
-        }
-        return 0;
-    }
-
-    fprintf(stderr, "[Stubs] jb_init: normal environment, limited functionality\n");
     return 0;
 }
 
@@ -182,26 +178,30 @@ WEAK_STUB kern_return_t exploit_get_kernel_task(mach_port_t *task) {
         }
     }
 
-    // TrollStore: 尝试 host_get_special_port
-    // 某些 iOS 版本下, task_for_pid-allow + system-task-ports 可能允许此调用
+    // TrollStore: kernel_task 不可用 (这是正常的)
+    // task_for_pid-allow 给了我们访问游戏进程 task port 的能力
+    // 但 kernel_task (pid=0) 需要 system-task-ports, TrollStore 没有
     if (env == 1) {
+        // 尝试但不指望成功
         kern_return_t kr = host_get_special_port(mach_host_self(), 0, 4, task);
         if (kr == KERN_SUCCESS && *task != MACH_PORT_NULL) {
-            fprintf(stderr, "[Stubs] kernel_task obtained via host_get_special_port in TS mode\n");
+            fprintf(stderr, "[Stubs] kernel_task obtained via host_get_special_port (rare!)\n");
             return KERN_SUCCESS;
         }
+        fprintf(stderr, "[Stubs] kernel_task not available on TrollStore (expected — using task_for_pid per-game)\n");
+        return KERN_FAILURE;
     }
 
-    // 通用 fallback: 尝试 task_for_pid(0) (很可能失败, 但不妨一试)
+    // 通用 fallback: task_for_pid(0) — 越狱下有戏, 正常情况下不行
     {
         kern_return_t kr = task_for_pid(mach_task_self(), 0, task);
         if (kr == KERN_SUCCESS && *task != MACH_PORT_NULL) {
-            fprintf(stderr, "[Stubs] kernel_task obtained via task_for_pid(0)\n");
+            fprintf(stderr, "[Stubs] kernel_task via task_for_pid(0)\n");
             return KERN_SUCCESS;
         }
     }
 
-    fprintf(stderr, "[Stubs] kernel_task not available (env=%d)\n", env);
+    fprintf(stderr, "[Stubs] kernel_task not available (env=%d, expected on TrollStore)\n", env);
     return KERN_FAILURE;
 }
 

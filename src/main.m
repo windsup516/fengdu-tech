@@ -118,14 +118,15 @@ static void resolve_dylib_functions(void) {
     // 调用未初始化的内核原语 = segfault
     // 这些指针在 get_task_port / game_read 中用到时会自动走 dylib 路径
     if (dylib_kcall && dylib_kern_reading) {
-        SAFE_LOG(@"Dylib kernel r/w available — WEAK stubs will route through dylib");
+        SAFE_LOG(@"Dylib kernel r/w available via exploit path");
+    } else if (dylib_kcall) {
+        SAFE_LOG(@"Dylib: kcall available, kern_reading via vm_read_overwrite stub (expected on TrollStore)");
     } else {
-        SAFE_LOG(@"Dylib primitives partial: kcall=%p kern_reading=%p kalloc=%p",
-                 (void*)dylib_kcall, (void*)dylib_kern_reading, (void*)dylib_kalloc);
+        SAFE_LOG(@"Dylib: userspace-only mode (kern_reading/kern_writing stubs use Mach VM API)");
     }
 
     if (!real_jb_init) {
-        SAFE_LOG(@"WARNING: jb_init NOT in dylib — WEAK stub used (IOSurface exploit disabled)");
+        SAFE_LOG(@"jb_init: using WEAK stub (no kernel exploit — expected on TrollStore, task_for_pid is enough)");
     }
 }
 
