@@ -425,7 +425,7 @@ static void install_crash_handlers(void) {
         // 测试3: task_for_pid 测几个系统 PID (1=launchd, 典型后台进程)
         for (int tp = 1; tp <= 10; tp++) {
             mach_port_t t = MACH_PORT_NULL;
-            kr = task_for_pid(mach_task_self(), tp, &t);
+            kern_return_t kr = task_for_pid(mach_task_self(), tp, &t);
             if (kr == KERN_SUCCESS) {
                 SAFE_LOG("Test3 task_for_pid(%d): SUCCESS task=%x", tp, t);
                 mach_port_deallocate(mach_task_self(), t);
