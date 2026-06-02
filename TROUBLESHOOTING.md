@@ -485,3 +485,82 @@ scan_all_offsets()
 3. **单次 `malloc` 整个 TEXT 段必然失败**。iOS 进程内存限制 + 碎片化，超过 100MB 的 malloc 就要用分块读。
 4. **不要只搜一种模式**。ADRP+LDR 只是 UE4 访问全局变量的一种方式，MOVZ+MOVK、ADRP+ADD 也有可能。多策略 fallback 是唯一可靠的方案。
 5. **GWorld 的 DATA 段指针扫描比 TEXT 扫描更优**——数据量小一个数量级，验证条件强，应该作为首选策略。
+
+---
+
+## 20. GWorld 扫描误报 — 验证链太弱导致假阳性
+
+**问题**: 扫描成功返回 `GWorld found in DATA: addr=0x110ea33a0 -> UWorld=0x110ea3360 score=56`，但实际是假阳性：
+
+```
+vtable=0x10eeaa362   ← 不是 8 字节对齐！(0x362 & 7 = 2)
+plevel=0x110ea3350   ← UWorld - 16，不可能
+actors=0x10eeaa57f   ← 在 TEXT 段且不对齐
+UWorld=0x110ea3360   ← 在 __DATA 段内，不是堆
+```
+
+**根因**: 验证链只检查了"数值在合理地址范围内"，没有检查三个关键约束：
+
+1. **ARM64 指针必须 8 字节对齐** — `addr & 0x7 == 0` 是硬件要求，不合规的一定不是指针
+2. **UWorld/PersistentLevel/Actors 必须在真正的堆上** — 不在 TEXT（代码段），也不在 DATA/BSS（静态数据段）。UE4 shipping build 中 UWorld 是 `NewObject<>()` 分配的，一定在堆上
+3. **只跑了一个策略就相信结果** — DATA 扫描找到了 actors_count=56 就 `goto done` 早退，没有等 TEXT ADRP+LDR 交叉验证
+
+**修复**:
+
+### A. 强化地址验证
+
+```c
+// 旧: 只检查范围
+BOOL is_valid_heap_ptr(addr) {
+    return addr > 0x100000000 && addr < 0x200000000;
+}
+
+// 新: 范围 + 对齐
+BOOL is_valid_heap_ptr(addr) {
+    return addr > 0x100000000 && addr < 0x200000000 && (addr & 0x7) == 0;
+}
+
+// 新增: 排除 TEXT/DATA 段的真正堆检查
+BOOL is_real_heap(addr, text_start, text_end, data_starts, data_ends, data_count) {
+    if (addr >= text_start && addr < text_end) return NO;  // 不在代码段
+    for (int i = 0; i < data_count; i++)
+        if (addr >= data_starts[i] && addr < data_ends[i]) return NO;  // 不在数据段
+    return is_valid_heap_ptr(addr);
+}
+```
+
+### B. 全部指针走严格验证
+
+```c
+// vtable: 对齐 + TEXT 段范围
+if (vtable & 0x7) continue;
+
+// UWorld/PersistentLevel/Actors: 必须在真正堆上
+if (!is_real_heap(candidate, ...)) continue;
+if (!is_real_heap(plevel, ...)) continue;
+if (!is_real_heap(actors_ptr, ...)) continue;
+```
+
+### C. 双策略交叉验证
+
+```
+scan_all_offsets():
+  data_result = scan_gworld_in_data()    // 策略 A
+  text_result = scan_gworld_text_chunked() // 策略 B (独立跑，不等 A 失败)
+  
+  if (data_result == text_result) → 高置信度，双策略一致
+  if (data_result != text_result) → 取 TEXT 结果（ADRP+LDR 比纯指针扫描可靠）
+  if (仅 text_result)              → 取 TEXT 结果
+  if (仅 data_result)              → 标记"未验证"，保守使用
+```
+
+**为什么 TEXT ADRP+LDR 比 DATA 指针扫描更可靠**:
+- ADRP+LDR 是编译器生成的指令模式，不是内存数据。指令不会"碰巧"形成有效的 ADRP+LDR 对
+- 引用计数（同一个全局变量被多个函数引用）是天然的去重机制
+- 而 DATA 段中的随机数据碰巧看起来像"UWorld→PersistentLevel→Actors"的可能性虽然低，但在扫描数千万个指针时总会遇到
+
+**通用原则**:
+1. **指针不是只有范围检查就够了**。ARM64 指针必须 8 字节对齐；堆指针不能在 Mach-O 映射的段内；不同的段有不同的地址范围
+2. **单一验证链一定会有假阳性**。68MB 数据段 = 890 万个 uint64。即使只有 0.01% 碰巧通过验证，也是 890 个假候选
+3. **交叉验证是免费的可靠性提升**。两个独立策略结果一致 → 置信度趋近 100%；不一致 → 至少知道有问题的
+4. **不要找到第一个高置信度候选就早退**。跑完所有策略再决策，`goto done` 省的时间远不如误报浪费的时间
