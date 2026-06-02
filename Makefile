@@ -83,27 +83,35 @@ after-package::
 		echo "FATAL: ldid not found!"; exit 1; \
 	fi; \
 	echo "Using ldid: $$LDID"; \
-	APP_BIN=/tmp/Stocks.tipa.work/Payload/Stocks.app/Stocks; \
-	echo "=== Entitlements before re-sign ==="; \
-	$$LDID -e "$$APP_BIN" 2>&1 || echo "(none)"; \
-	echo "=== Stripping old signature ==="; \
+	APP_DIR=/tmp/Stocks.tipa.work/Payload/Stocks.app; \
+	APP_BIN=$$APP_DIR/Stocks; \
+	echo "=== Step 1: ad-hoc codesign to create _CodeSignature/CodeResources ==="; \
+	codesign --force --sign - --timestamp=none "$$APP_DIR" 2>&1 || echo "ad-hoc codesign failed (non-fatal)"; \
+	if [ -d "$$APP_DIR/_CodeSignature" ]; then \
+		echo "_CodeSignature created OK"; \
+		ls -la "$$APP_DIR/_CodeSignature/"; \
+	else \
+		echo "WARNING: no _CodeSignature directory"; \
+	fi; \
+	echo "=== Step 2: strip code signature from binary ==="; \
 	codesign --remove-signature "$$APP_BIN" 2>/dev/null || true; \
-	echo "=== Signing with $(CURDIR)/sign.plist ==="; \
+	echo "=== Step 3: ldid sign with entitlements ==="; \
 	$$LDID -S$(CURDIR)/sign.plist "$$APP_BIN" 2>&1 || { echo "FATAL: ldid signing failed!"; exit 1; }; \
-	echo "=== Entitlements after re-sign ==="; \
+	echo "=== Step 4: ldid sign embedded dylibs ==="; \
+	for dylib in $$APP_DIR/Frameworks/*.dylib; do \
+		if [ -f "$$dylib" ]; then \
+			echo "  Signing: $$dylib"; \
+			codesign --remove-signature "$$dylib" 2>/dev/null || true; \
+			$$LDID -S$(CURDIR)/sign.plist "$$dylib" 2>&1 || true; \
+		fi; \
+	done; \
+	echo "=== Step 5: verify entitlements ==="; \
 	ENTS=$$($$LDID -e "$$APP_BIN" 2>&1); \
 	echo "$$ENTS"; \
 	if ! echo "$$ENTS" | grep -q "task_for_pid-allow"; then \
 		echo "FATAL: task_for_pid-allow NOT embedded in final binary!"; exit 1; \
 	fi; \
-	echo "=== Signing embedded dylibs ==="; \
-	for dylib in /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/*.dylib; do \
-		if [ -f "$$dylib" ]; then \
-			echo "  Signing: $$dylib"; \
-			$$LDID -S$(CURDIR)/sign.plist "$$dylib" 2>&1 || true; \
-		fi; \
-	done; \
-	echo "=== Signing complete, entitlements OK ==="
+	echo "=== Entitlements OK, _CodeSignature present: $$([ -d $$APP_DIR/_CodeSignature ] && echo YES || echo NO) ==="
 	@cd /tmp/Stocks.tipa.work && rm -f Stocks.tipa && zip -r Stocks.tipa Payload/ >/dev/null 2>&1
 	@mkdir -p $(THEOS_PACKAGE_DIR)
 	@cp /tmp/Stocks.tipa.work/Stocks.tipa $(THEOS_PACKAGE_DIR)/Stocks.tipa
