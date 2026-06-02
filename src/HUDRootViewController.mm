@@ -209,13 +209,28 @@ static BOOL g_imGuiInitialized = NO;
     CGRect bounds = screen.bounds;
     CGFloat scale = screen.scale;
 
-    g_screenScale = (float)scale;
-    g_screenWidth = (float)bounds.size.width;
-    g_screenHeight = (float)bounds.size.height;
+    // Stocks app 是竖屏, 但游戏是横屏 — 通过设备方向判断是否需要交换宽高
+    UIDeviceOrientation devOrientation = [[UIDevice currentDevice] orientation];
+    BOOL isLandscape = (devOrientation == UIDeviceOrientationLandscapeLeft ||
+                        devOrientation == UIDeviceOrientationLandscapeRight);
 
-    gMetalLayer.frame = bounds;
-    gMetalLayer.drawableSize = CGSizeMake(bounds.size.width * scale,
-                                           bounds.size.height * scale);
+    float w = (float)bounds.size.width;
+    float h = (float)bounds.size.height;
+    if (isLandscape && w < h) {
+        // 设备横屏但 UIScreen 返回竖屏尺寸 — 交换
+        float tmp = w; w = h; h = tmp;
+        HUD_LOG(@"Orientation: landscape — swapping screen to %.0fx%.0f", w, h);
+    }
+
+    g_screenScale = (float)scale;
+    g_screenWidth = w;
+    g_screenHeight = h;
+
+    CGRect layerFrame = CGRectMake(0, 0, w, h);
+    gMetalLayer.frame = layerFrame;
+    gMetalLayer.drawableSize = CGSizeMake(w * scale, h * scale);
+    HUD_LOG(@"syncCurrentOrientation: screen=%.0fx%.0f scale=%.1f landscape=%d",
+            g_screenWidth, g_screenHeight, g_screenScale, isLandscape);
 }
 
 - (void)handleSenderID:(uint64_t)senderID {

@@ -204,7 +204,12 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
                                                        object:nil
                                                         queue:[NSOperationQueue mainQueue]
                                                    usingBlock:^(NSNotification *note) {
-        HUD_LOG(@"App will resign active — preserving window state (NO makeKeyAndVisible)");
+        HUD_LOG(@"App will resign active — syncing orientation + preserving window state");
+        [weakSelf.rootVC syncCurrentOrientation];
+        HUD_LOG(@"Screen after sync: %.0fx%.0f scale=%.1f",
+                [HUDRootViewController screenWidth],
+                [HUDRootViewController screenHeight],
+                [HUDRootViewController screenScale]);
         // 只设 hidden + level, makeKeyAndVisible 会杀死 contextId
         weakSelf.hudWindow.hidden = NO;
         weakSelf.touchWindow.hidden = NO;

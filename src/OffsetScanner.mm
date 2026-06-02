@@ -298,13 +298,22 @@ static BOOL is_real_heap(uint64_t addr, uint64_t text_start, uint64_t text_end,
     return is_valid_heap_ptr(addr);
 }
 
-// vtable 有效性: 必须在 TEXT 或只读常量段 (iOS 上 C++ vtable 在 __DATA_CONST/__AUTH_CONST)
+// vtable 有效性: 必须在任何 Mach-O 静态段内 (TEXT/DATA_CONST/AUTH_CONST/DATA)
+// 不同编译器/SDK vtable 位置不同: 旧版放 __TEXT, 新版放 __DATA_CONST, 某些放 __DATA
+// 但 vtable 绝不在堆上 — 可以通过排除堆来判断
 static BOOL is_valid_vtable(uint64_t vtable, uint64_t text_start, uint64_t text_end,
-                             uint64_t *const_starts, uint64_t *const_ends, int const_count) {
+                             uint64_t *const_starts, uint64_t *const_ends, int const_count,
+                             uint64_t *data_starts, uint64_t *data_ends, int data_count) {
     if (vtable & 0x7) return NO; // ARM64 对齐
-    if (vtable >= text_start && vtable < text_end) return YES;  // __TEXT
+    // 堆范围检查: vtable 不应该在堆上
+    if (vtable < 0x100000000 || vtable >= 0x200000000) return NO;
+    // 在任何 Mach-O 映射段内即为有效 vtable
+    if (vtable >= text_start && vtable < text_end) return YES;
     for (int i = 0; i < const_count; i++) {
-        if (vtable >= const_starts[i] && vtable < const_ends[i]) return YES; // __DATA_CONST / __AUTH_CONST
+        if (vtable >= const_starts[i] && vtable < const_ends[i]) return YES;
+    }
+    for (int i = 0; i < data_count; i++) {
+        if (vtable >= data_starts[i] && vtable < data_ends[i]) return YES;
     }
     return NO;
 }
@@ -410,6 +419,8 @@ static uint64_t scan_gworld_in_data(mach_port_t task, uint64_t text_start, uint6
     uint64_t best_addr = 0;
     int best_score = 0;
     int candidates_checked = 0;
+    double scan_start = CACurrentMediaTime();
+    double deadline = scan_start + 15.0; // 15秒硬限制, 留余量给后台任务
 
     for (int d = 0; d < data_count; d++) {
         uint64_t seg_start = data_starts[d];
@@ -426,6 +437,14 @@ static uint64_t scan_gworld_in_data(mach_port_t task, uint64_t text_start, uint6
         if (!buf) continue;
 
         for (uint64_t addr = seg_start; addr + 8 <= seg_end; ) {
+            // 超时检查
+            if (CACurrentMediaTime() > deadline) {
+                HOOKS_LOG(@"DATA scan: deadline reached at offset 0x%llx/0x%llx (%.1f%%)",
+                          addr - seg_start, seg_size, 100.0 * (addr - seg_start) / (double)seg_size);
+                free(buf);
+                goto done;
+            }
+
             size_t chunk = buf_size;
             if (addr + chunk > seg_end) chunk = (size_t)(seg_end - addr);
 
@@ -444,7 +463,9 @@ static uint64_t scan_gworld_in_data(mach_port_t task, uint64_t text_start, uint6
                 // vtable: 允许在 TEXT 或只读常量段 (iOS: __DATA_CONST/__AUTH_CONST)
                 uint64_t vtable = 0;
                 if (scan_read_uint64(task, candidate, &vtable) != KERN_SUCCESS) continue;
-                if (!is_valid_vtable(vtable, text_start, text_end, const_starts, const_ends, const_count)) continue;
+                if (!is_valid_vtable(vtable, text_start, text_end,
+                                      const_starts, const_ends, const_count,
+                                      data_starts, data_ends, data_count)) continue;
 
                 // PersistentLevel (+0x30) — 必须在堆上
                 uint64_t plevel = 0;
