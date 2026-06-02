@@ -49,7 +49,7 @@ static void resolve_dylib_functions(void) {
     char exePath[1024];
     uint32_t sz = (uint32_t)sizeof(exePath);
     if (_NSGetExecutablePath(exePath, &sz) != 0) {
-        SAFE_LOG("Dylib: _NSGetExecutablePath failed");
+        SAFE_LOG(@"Dylib: _NSGetExecutablePath failed");
         return;
     }
 
@@ -60,10 +60,10 @@ static void resolve_dylib_functions(void) {
 
     // 先检查文件是否存在
     BOOL fwExists = [[NSFileManager defaultManager] fileExistsAtPath:fwPath];
-    SAFE_LOG("Dylib path: %s (exists=%s)", [fwPath UTF8String], fwExists ? "YES" : "NO");
+    SAFE_LOG(@"Dylib path: %s (exists=%s)", [fwPath UTF8String], fwExists ? "YES" : "NO");
 
     if (!fwExists) {
-        SAFE_LOG("Dylib FILE NOT FOUND at Frameworks path!");
+        SAFE_LOG(@"Dylib FILE NOT FOUND at Frameworks path!");
         return;
     }
 
@@ -72,18 +72,18 @@ static void resolve_dylib_functions(void) {
     if (!jbHandle) {
         // 打完整 dlerror，可能的错误：签名无效、架构不匹配、依赖缺失、LC_RPATH 不对
         const char *err = dlerror();
-        SAFE_LOG("Dylib dlopen FAILED (abs path): %s", err ? err : "unknown");
+        SAFE_LOG(@"Dylib dlopen FAILED (abs path): %s", err ? err : "unknown");
 
         // Fallback: 尝试 @rpath（如果 dylib 的 install_name 是 @rpath）
         jbHandle = dlopen("@rpath/libjailbreak.dylib", RTLD_LAZY);
         if (!jbHandle) {
             err = dlerror();
-            SAFE_LOG("Dylib dlopen FAILED (@rpath): %s", err ? err : "unknown");
+            SAFE_LOG(@"Dylib dlopen FAILED (@rpath): %s", err ? err : "unknown");
             return;
         }
-        SAFE_LOG("Dylib loaded via @rpath");
+        SAFE_LOG(@"Dylib loaded via @rpath");
     } else {
-        SAFE_LOG("Dylib loaded OK (abs path)");
+        SAFE_LOG(@"Dylib loaded OK (abs path)");
     }
 
     real_jb_init = dlsym(jbHandle, "jb_init");
@@ -92,14 +92,14 @@ static void resolve_dylib_functions(void) {
     real_phystokv = dlsym(jbHandle, "phystokv");
     real_xpf_inject_dylib = dlsym(jbHandle, "xpf_inject_dylib");
 
-    SAFE_LOG("Dylib symbols: jb_init=%p physread64=%p physwritebuf=%p phystokv=%p",
+    SAFE_LOG(@"Dylib symbols: jb_init=%p physread64=%p physwritebuf=%p phystokv=%p",
              (void*)real_jb_init, (void*)real_physread64,
              (void*)real_physwritebuf, (void*)real_phystokv);
 
     void *kcall_ptr = dlsym(jbHandle, "kcall");
     void *kalloc_ptr = dlsym(jbHandle, "kalloc");
     void *exp_kt_ptr = dlsym(jbHandle, "exploit_get_kernel_task");
-    SAFE_LOG("Dylib kcall=%p kalloc=%p exploit_get_kernel_task=%p",
+    SAFE_LOG(@"Dylib kcall=%p kalloc=%p exploit_get_kernel_task=%p",
              kcall_ptr, kalloc_ptr, exp_kt_ptr);
 
     // === 将 dylib 的真函数指针写入全局变量，让 WEAK stub 优先走 ===
@@ -110,7 +110,7 @@ static void resolve_dylib_functions(void) {
     dylib_physread64 = real_physread64;
     dylib_physwritebuf = real_physwritebuf;
 
-    SAFE_LOG("Dylib globals: kern_reading=%p kern_writing=%p kcall=%p kalloc=%p physread64=%p",
+    SAFE_LOG(@"Dylib globals: kern_reading=%p kern_writing=%p kcall=%p kalloc=%p physread64=%p",
              (void*)dylib_kern_reading, (void*)dylib_kern_writing,
              (void*)dylib_kcall, (void*)dylib_kalloc, (void*)dylib_physread64);
 
@@ -118,14 +118,14 @@ static void resolve_dylib_functions(void) {
     // 调用未初始化的内核原语 = segfault
     // 这些指针在 get_task_port / game_read 中用到时会自动走 dylib 路径
     if (dylib_kcall && dylib_kern_reading) {
-        SAFE_LOG("Dylib kernel r/w available — WEAK stubs will route through dylib");
+        SAFE_LOG(@"Dylib kernel r/w available — WEAK stubs will route through dylib");
     } else {
-        SAFE_LOG("Dylib primitives partial: kcall=%p kern_reading=%p kalloc=%p",
+        SAFE_LOG(@"Dylib primitives partial: kcall=%p kern_reading=%p kalloc=%p",
                  (void*)dylib_kcall, (void*)dylib_kern_reading, (void*)dylib_kalloc);
     }
 
     if (!real_jb_init) {
-        SAFE_LOG("WARNING: jb_init NOT in dylib — WEAK stub used (IOSurface exploit disabled)");
+        SAFE_LOG(@"WARNING: jb_init NOT in dylib — WEAK stub used (IOSurface exploit disabled)");
     }
 }
 
@@ -211,41 +211,41 @@ static void install_crash_handlers(void) {
     // 解析 dylib 真实函数 (必须在 jb_init 之前)
     resolve_dylib_functions();
 
-    SAFE_LOG("=== 风度全功能 Starting ===");
+    SAFE_LOG(@"=== 风度全功能 Starting ===");
 
     // ===== 步骤1: 环境检测 (非致命) =====
     self.environmentType = 0;
     if (is_jailbroken()) {
         self.environmentType = 2;
-        SAFE_LOG("Environment: JAILBROKEN");
+        SAFE_LOG(@"Environment: JAILBROKEN");
     } else if (is_trollstore()) {
         self.environmentType = 1;
-        SAFE_LOG("Environment: TrollStore");
+        SAFE_LOG(@"Environment: TrollStore");
     } else {
-        SAFE_LOG("Environment: Normal (limited)");
+        SAFE_LOG(@"Environment: Normal (limited)");
     }
 
     // ===== 步骤2: XPF 内核框架初始化 (允许失败) =====
     // 在 TrollStore 环境下这步会失败, 但不影响 overlay 功能
     int xpfResult = xpf_initialize_kernel();
     if (xpfResult != 0) {
-        SAFE_LOG("XPF kernel init: FAILED (expected on TrollStore, continuing...)");
+        SAFE_LOG(@"XPF kernel init: FAILED (expected on TrollStore, continuing...)");
     } else {
-        SAFE_LOG("XPF kernel init: OK");
+        SAFE_LOG(@"XPF kernel init: OK");
     }
 
     // ===== 步骤3: 越狱原语初始化 (优先用 dylib 版本) =====
     int jbResult = call_jb_init();
     if (jbResult != 0) {
-        SAFE_LOG("jb_init: FAILED (continuing with userspace only)");
+        SAFE_LOG(@"jb_init: FAILED (continuing with userspace only)");
     }
 
     // ===== 步骤3.5: 内防绕过 (红狼 AAyantibs, 在游戏连接前启动) =====
     int acResult = ac_bypass_init();
     if (acResult != 0) {
-        SAFE_LOG("Anti-cheat bypass: incomplete (continuing)");
+        SAFE_LOG(@"Anti-cheat bypass: incomplete (continuing)");
     } else {
-        SAFE_LOG("Anti-cheat bypass: OK");
+        SAFE_LOG(@"Anti-cheat bypass: OK");
     }
 
     // ===== 步骤4: 设置主窗口 =====
@@ -284,13 +284,13 @@ static void install_crash_handlers(void) {
 - (BOOL)launchDeltaForceGame {
     Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
     if (!workspaceClass) {
-        SAFE_LOG("LSApplicationWorkspace 不可用");
+        SAFE_LOG(@"LSApplicationWorkspace 不可用");
         return NO;
     }
 
     id workspace = [workspaceClass performSelector:@selector(defaultWorkspace)];
     if (!workspace) {
-        SAFE_LOG("无法获取 defaultWorkspace");
+        SAFE_LOG(@"无法获取 defaultWorkspace");
         return NO;
     }
 
@@ -310,11 +310,11 @@ static void install_crash_handlers(void) {
     for (NSString *bid in knownBIDs) {
         @try {
             if (openApp(workspace, openSel, bid)) {
-                SAFE_LOG("游戏启动成功: %s", [bid UTF8String]);
+                SAFE_LOG(@"游戏启动成功: %s", [bid UTF8String]);
                 return YES;
             }
         } @catch (NSException *e) {
-            SAFE_LOG("启动 %s 失败: %s", [bid UTF8String], [[e description] UTF8String]);
+            SAFE_LOG(@"启动 %s 失败: %s", [bid UTF8String], [[e description] UTF8String]);
         }
     }
 
@@ -337,26 +337,26 @@ static void install_crash_handlers(void) {
 
             if (isDelta) {
                 if (openApp(workspace, openSel, bundleID)) {
-                    SAFE_LOG("游戏启动成功: %s (%s)", [appName UTF8String], [bundleID UTF8String]);
+                    SAFE_LOG(@"游戏启动成功: %s (%s)", [appName UTF8String], [bundleID UTF8String]);
                     return YES;
                 }
             }
         } @catch (NSException *e) {}
     }
 
-    SAFE_LOG("未找到三角洲行动游戏，请手动打开");
+    SAFE_LOG(@"未找到三角洲行动游戏，请手动打开");
     return NO;
 }
 
 // 探查游戏包 — 通过 proc_pidpath 获取游戏可执行文件路径后检查 Frameworks
 - (void)inspectGameBundleAtPath:(NSString *)gamePath {
     if (!gamePath) {
-        SAFE_LOG("inspectGameBundleAtPath: gamePath is nil");
+        SAFE_LOG(@"inspectGameBundleAtPath: gamePath is nil");
         return;
     }
     NSFileManager *fm = [NSFileManager defaultManager];
 
-    SAFE_LOG("=== 探查游戏包: %s ===", [gamePath UTF8String]);
+    SAFE_LOG(@"=== 探查游戏包: %s ===", [gamePath UTF8String]);
 
     // 列出 .app 根目录
     NSArray *rootFiles = [fm contentsOfDirectoryAtPath:gamePath error:nil];
@@ -366,9 +366,9 @@ static void install_crash_handlers(void) {
         [fm fileExistsAtPath:fullPath isDirectory:&isDir];
         unsigned long long size = [[fm attributesOfItemAtPath:fullPath error:nil] fileSize];
         if (isDir) {
-            SAFE_LOG("  [DIR]  %s/", [f UTF8String]);
+            SAFE_LOG(@"  [DIR]  %s/", [f UTF8String]);
         } else {
-            SAFE_LOG("  [FILE] %s (%llu bytes)", [f UTF8String], size);
+            SAFE_LOG(@"  [FILE] %s (%llu bytes)", [f UTF8String], size);
         }
     }
 
@@ -376,27 +376,27 @@ static void install_crash_handlers(void) {
     NSString *fwPath = [gamePath stringByAppendingPathComponent:@"Frameworks"];
     if ([fm fileExistsAtPath:fwPath]) {
         NSArray *fwFiles = [fm contentsOfDirectoryAtPath:fwPath error:nil];
-        SAFE_LOG("--- Frameworks/ (%lu items) ---", (unsigned long)fwFiles.count);
+        SAFE_LOG(@"--- Frameworks/ (%lu items) ---", (unsigned long)fwFiles.count);
         for (NSString *f in fwFiles) {
             NSString *fullPath = [fwPath stringByAppendingPathComponent:f];
             unsigned long long size = [[fm attributesOfItemAtPath:fullPath error:nil] fileSize];
-            SAFE_LOG("  %s (%llu bytes)", [f UTF8String], size);
+            SAFE_LOG(@"  %s (%llu bytes)", [f UTF8String], size);
         }
     } else {
-        SAFE_LOG("Frameworks/ 目录不存在");
+        SAFE_LOG(@"Frameworks/ 目录不存在");
     }
 
-    SAFE_LOG("=== 游戏包探查完成 ===");
+    SAFE_LOG(@"=== 游戏包探查完成 ===");
 }
 
 // 授权成功后直接启动悬浮窗 + 自动打开游戏 + 注入
 - (void)startCheatDirectly {
     if (self.cheatStarted) {
-        SAFE_LOG("startCheatDirectly: already started, skipping");
+        SAFE_LOG(@"startCheatDirectly: already started, skipping");
         return;
     }
     self.cheatStarted = YES;
-    SAFE_LOG("授权成功，正在启动辅助...");
+    SAFE_LOG(@"授权成功，正在启动辅助...");
 
     // 获取 scene
     id scene = self.window.windowScene;
@@ -408,14 +408,14 @@ static void install_crash_handlers(void) {
     HUDController *hud = [HUDController shared];
     @try {
         [hud createWindowsOnScene:scene];
-        SAFE_LOG("HUD windows created OK");
+        SAFE_LOG(@"HUD windows created OK");
     } @catch (NSException *e) {
-        SAFE_LOG("HUD create failed: %s", [[e description] UTF8String]);
+        SAFE_LOG(@"HUD create failed: %s", [[e description] UTF8String]);
     }
 
     if (hud.windowsCreated) {
         [hud show];
-        SAFE_LOG("HUD overlay started");
+        SAFE_LOG(@"HUD overlay started");
     }
 
     // ====== 诊断0: 运行时 binary hash (确认手机上的二进制 == CI artifact) ======
@@ -427,21 +427,21 @@ static void install_crash_handlers(void) {
             CC_SHA256(exeData.bytes, (CC_LONG)exeData.length, hash);
             NSMutableString *hs = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH*2];
             for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) [hs appendFormat:@"%02x", hash[i]];
-            SAFE_LOG("Binary SHA256: %s", [hs UTF8String]);
-            SAFE_LOG("Expected CI:   898d50fcebfaa78cdb95b59aa1aeae5ce1ca7b8f26705a242d29834b51202cef");
+            SAFE_LOG(@"Binary SHA256: %s", [hs UTF8String]);
+            SAFE_LOG(@"Expected CI:   898d50fcebfaa78cdb95b59aa1aeae5ce1ca7b8f26705a242d29834b51202cef");
             BOOL match = [hs isEqualToString:@"898d50fcebfaa78cdb95b59aa1aeae5ce1ca7b8f26705a242d29834b51202cef"];
-            SAFE_LOG("Binary match CI: %s", match ? "YES" : "NO (different binary!)");
+            SAFE_LOG(@"Binary match CI: %s", match ? "YES" : "NO (different binary!)");
         } else {
-            SAFE_LOG("Binary SHA256: FAILED to read executable at %s", [exePath UTF8String]);
+            SAFE_LOG(@"Binary SHA256: FAILED to read executable at %s", [exePath UTF8String]);
         }
     }
 
     // ====== 诊断0b: SecTaskCopyValueForEntitlement (内核是否承认这些权限) ======
     {
-        SAFE_LOG("=== SecTask runtime entitlement check ===");
+        SAFE_LOG(@"=== SecTask runtime entitlement check ===");
         SecTaskRef task = SecTaskCreateFromSelf(NULL);
         if (!task) {
-            SAFE_LOG("SecTaskCreateFromSelf: FAILED");
+            SAFE_LOG(@"SecTaskCreateFromSelf: FAILED");
         } else {
             NSArray *keys = @[
                 @"get-task-allow",
@@ -458,17 +458,17 @@ static void install_crash_handlers(void) {
                 CFTypeRef val = SecTaskCopyValueForEntitlement(task, (__bridge CFStringRef)k, NULL);
                 if (val) {
                     if (CFGetTypeID(val) == CFBooleanGetTypeID()) {
-                        SAFE_LOG("  %s = %s", [k UTF8String], CFBooleanGetValue(val) ? "TRUE" : "FALSE");
+                        SAFE_LOG(@"  %s = %s", [k UTF8String], CFBooleanGetValue(val) ? "TRUE" : "FALSE");
                     } else if (CFGetTypeID(val) == CFStringGetTypeID()) {
-                        SAFE_LOG("  %s = '%s'", [k UTF8String], [(__bridge NSString*)val UTF8String]);
+                        SAFE_LOG(@"  %s = '%s'", [k UTF8String], [(__bridge NSString*)val UTF8String]);
                     } else if (CFGetTypeID(val) == CFArrayGetTypeID()) {
-                        SAFE_LOG("  %s = <array %ld items>", [k UTF8String], (long)CFArrayGetCount(val));
+                        SAFE_LOG(@"  %s = <array %ld items>", [k UTF8String], (long)CFArrayGetCount(val));
                     } else {
-                        SAFE_LOG("  %s = <type %lu>", [k UTF8String], (unsigned long)CFGetTypeID(val));
+                        SAFE_LOG(@"  %s = <type %lu>", [k UTF8String], (unsigned long)CFGetTypeID(val));
                     }
                     CFRelease(val);
                 } else {
-                    SAFE_LOG("  %s = (nil - NOT GRANTED)", [k UTF8String]);
+                    SAFE_LOG(@"  %s = (nil - NOT GRANTED)", [k UTF8String]);
                 }
             }
 
@@ -484,34 +484,34 @@ static void install_crash_handlers(void) {
                             [joined appendFormat:@"%@, ", item];
                         }
                     }
-                    SAFE_LOG("  IOKit-user-client-class = GRANTED [%s]", [joined UTF8String]);
+                    SAFE_LOG(@"  IOKit-user-client-class = GRANTED [%s]", [joined UTF8String]);
                 }
                 CFRelease(iokitVal);
             } else {
-                SAFE_LOG("  IOKit-user-client-class = (nil - NOT GRANTED by AMFI)");
+                SAFE_LOG(@"  IOKit-user-client-class = (nil - NOT GRANTED by AMFI)");
             }
             CFRelease(task);
         }
-        SAFE_LOG("=== SecTask check complete ===");
+        SAFE_LOG(@"=== SecTask check complete ===");
     }
 
     // 前台预检: 逐层诊断所有进程枚举 API
     // 依次测试: proc_pidpath / task_for_pid / proc_name / proc_listallpids / proc_listpids
     {
         pid_t myPid = getpid();
-        SAFE_LOG("=== Foreground API diagnostic (self PID=%d) ===", myPid);
+        SAFE_LOG(@"=== Foreground API diagnostic (self PID=%d) ===", myPid);
 
         // 测试1: proc_pidpath — 能读自身路径吗?
         char pathbuf[PROC_PIDPATHINFO_MAXSIZE] = {0};
         errno = 0;
         int ppRet = proc_pidpath(myPid, pathbuf, sizeof(pathbuf));
-        SAFE_LOG("Test1 proc_pidpath(self): ret=%d errno=%d path=%s", ppRet, errno, ppRet > 0 ? pathbuf : "(fail)");
+        SAFE_LOG(@"Test1 proc_pidpath(self): ret=%d errno=%d path=%s", ppRet, errno, ppRet > 0 ? pathbuf : "(fail)");
 
         // 测试2: task_for_pid — 能获取自身 task port 吗?
         mach_port_t selfTask = MACH_PORT_NULL;
         errno = 0;
         kern_return_t tfpRet = task_for_pid(mach_task_self(), myPid, &selfTask);
-        SAFE_LOG("Test2 task_for_pid(self): kr=%d errno=%d task=%x", tfpRet, errno, selfTask);
+        SAFE_LOG(@"Test2 task_for_pid(self): kr=%d errno=%d task=%x", tfpRet, errno, selfTask);
         if (selfTask != MACH_PORT_NULL) {
             mach_port_deallocate(mach_task_self(), selfTask);
         }
@@ -521,7 +521,7 @@ static void install_crash_handlers(void) {
             char p1buf[PROC_PIDPATHINFO_MAXSIZE] = {0};
             errno = 0;
             int p1Ret = proc_pidpath(1, p1buf, sizeof(p1buf));
-            SAFE_LOG("Test3 proc_pidpath(1): ret=%d errno=%d path=%s", p1Ret, errno, p1Ret > 0 ? p1buf : "(fail)");
+            SAFE_LOG(@"Test3 proc_pidpath(1): ret=%d errno=%d path=%s", p1Ret, errno, p1Ret > 0 ? p1buf : "(fail)");
         }
 
         // 测试3b: task_for_pid 测几个系统 PID
@@ -529,7 +529,7 @@ static void install_crash_handlers(void) {
             mach_port_t t = MACH_PORT_NULL;
             kern_return_t kr = task_for_pid(mach_task_self(), tp, &t);
             if (kr == KERN_SUCCESS) {
-                SAFE_LOG("Test3b task_for_pid(%d): SUCCESS task=%x", tp, t);
+                SAFE_LOG(@"Test3b task_for_pid(%d): SUCCESS task=%x", tp, t);
                 mach_port_deallocate(mach_task_self(), t);
             }
         }
@@ -538,25 +538,25 @@ static void install_crash_handlers(void) {
         char myName[64] = {0};
         errno = 0;
         proc_name(myPid, myName, sizeof(myName)-1);
-        SAFE_LOG("Test4 proc_name(self): name='%s' errno=%d", myName, errno);
+        SAFE_LOG(@"Test4 proc_name(self): name='%s' errno=%d", myName, errno);
 
         // 测试5: proc_listallpids
         int pidbuf[256];
         errno = 0;
         int testN = proc_listallpids(pidbuf, sizeof(pidbuf));
-        SAFE_LOG("Test5 proc_listallpids: ret=%d errno=%d bufsize=%zu", testN, errno, sizeof(pidbuf));
+        SAFE_LOG(@"Test5 proc_listallpids: ret=%d errno=%d bufsize=%zu", testN, errno, sizeof(pidbuf));
         if (testN > 0) {
             for (int i = 0; i < testN && i < 5; i++) {
                 char pn[64] = {0};
                 proc_name(pidbuf[i], pn, sizeof(pn)-1);
-                SAFE_LOG("  PID[%d]=%d name=%s", i, pidbuf[i], pn);
+                SAFE_LOG(@"  PID[%d]=%d name=%s", i, pidbuf[i], pn);
             }
         }
 
         // 测试6: proc_listpids(PROC_ALL_PIDS)
         errno = 0;
         int testN2 = proc_listpids(1 /* PROC_ALL_PIDS */, 0, pidbuf, sizeof(pidbuf));
-        SAFE_LOG("Test6 proc_listpids: ret=%d errno=%d", testN2, errno);
+        SAFE_LOG(@"Test6 proc_listpids: ret=%d errno=%d", testN2, errno);
 
         // 测试7: sysctl(KERN_PROC_ALL) — 绕过 sandbox 的关键路径
         {
@@ -564,15 +564,15 @@ static void install_crash_handlers(void) {
             size_t bufSize = 0;
             errno = 0;
             int sRet = sysctl(mib, 4, NULL, &bufSize, NULL, 0);
-            SAFE_LOG("Test7 sysctl(KERN_PROC_ALL) size query: ret=%d errno=%d bufSize=%zu", sRet, errno, bufSize);
+            SAFE_LOG(@"Test7 sysctl(KERN_PROC_ALL) size query: ret=%d errno=%d bufSize=%zu", sRet, errno, bufSize);
             if (sRet == 0 && bufSize > 0) {
                 struct kinfo_proc *procs = (struct kinfo_proc *)malloc(bufSize);
                 if (procs) {
                     sRet = sysctl(mib, 4, procs, &bufSize, NULL, 0);
                     int count = (int)(bufSize / sizeof(struct kinfo_proc));
-                    SAFE_LOG("Test7 sysctl data: ret=%d errno=%d process_count=%d", sRet, errno, count);
+                    SAFE_LOG(@"Test7 sysctl data: ret=%d errno=%d process_count=%d", sRet, errno, count);
                     for (int i = 0; i < count && i < 5; i++) {
-                        SAFE_LOG("  [%d] %s", procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm);
+                        SAFE_LOG(@"  [%d] %s", procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm);
                     }
                     free(procs);
                 }
@@ -583,23 +583,23 @@ static void install_crash_handlers(void) {
         {
             mach_port_t kt = MACH_PORT_NULL;
             kern_return_t kr = exploit_get_kernel_task(&kt);
-            SAFE_LOG("Test8 exploit_get_kernel_task: kr=%d task=%x", kr, kt);
+            SAFE_LOG(@"Test8 exploit_get_kernel_task: kr=%d task=%x", kr, kt);
             if (kt != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), kt);
 
             kt = MACH_PORT_NULL;
             kr = host_get_special_port(mach_host_self(), 0, 4, &kt);
-            SAFE_LOG("Test8 host_get_special_port(HOST_KERNEL_PORT): kr=%d task=%x", kr, kt);
+            SAFE_LOG(@"Test8 host_get_special_port(HOST_KERNEL_PORT): kr=%d task=%x", kr, kt);
             if (kt != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), kt);
         }
 
         // 测试9: 启动 RootHelper 查看其环境中 task_for_pid 是否可用
         {
-            SAFE_LOG("Test9 RootHelper spawn test...");
+            SAFE_LOG(@"Test9 RootHelper spawn test...");
             NSString *rhPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
             if (!rhPath) {
                 rhPath = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"RootHelper"];
             }
-            SAFE_LOG("Test9 RootHelper path: %s exists=%s", [rhPath UTF8String],
+            SAFE_LOG(@"Test9 RootHelper path: %s exists=%s", [rhPath UTF8String],
                      [[NSFileManager defaultManager] fileExistsAtPath:rhPath] ? "YES" : "NO");
             if ([[NSFileManager defaultManager] fileExistsAtPath:rhPath]) {
                 pid_t rhPid = 0;
@@ -608,33 +608,33 @@ static void install_crash_handlers(void) {
                 posix_spawnattr_t attr;
                 posix_spawnattr_init(&attr);
                 int ret = posix_spawn(&rhPid, rpath, NULL, &attr, argv, NULL);
-                SAFE_LOG("Test9 posix_spawn ret=%d pid=%d", ret, rhPid);
+                SAFE_LOG(@"Test9 posix_spawn ret=%d pid=%d", ret, rhPid);
                 if (ret == 0 && rhPid > 0) {
                     sleep(3); // 等它跑完
                     NSString *rhLog = [NSString stringWithContentsOfFile:@"/tmp/roothelper.log"
                                                                 encoding:NSUTF8StringEncoding error:nil];
                     if (rhLog.length > 0) {
                         for (NSString *line in [rhLog componentsSeparatedByString:@"\n"]) {
-                            if (line.length > 0) SAFE_LOG("RootHelper: %s", [line UTF8String]);
+                            if (line.length > 0) SAFE_LOG(@"RootHelper: %s", [line UTF8String]);
                         }
                     } else {
-                        SAFE_LOG("Test9 RootHelper log empty/missing");
+                        SAFE_LOG(@"Test9 RootHelper log empty/missing");
                     }
                 }
                 posix_spawnattr_destroy(&attr);
             } else {
-                SAFE_LOG("Test9 RootHelper binary NOT FOUND");
+                SAFE_LOG(@"Test9 RootHelper binary NOT FOUND");
             }
         }
 
-        SAFE_LOG("=== Foreground diagnostic complete ===");
+        SAFE_LOG(@"=== Foreground diagnostic complete ===");
     }
 
     // 后台: 先启动游戏, 再注入
     // 使用 beginBackgroundTask 防止 iOS 挂起扫描线程
     __block UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
     bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithName:@"GameLauncher" expirationHandler:^{
-        SAFE_LOG("后台任务即将超时");
+        SAFE_LOG(@"后台任务即将超时");
         if (bgTask != UIBackgroundTaskInvalid) {
             [[UIApplication sharedApplication] endBackgroundTask:bgTask];
             bgTask = UIBackgroundTaskInvalid;
@@ -652,29 +652,29 @@ static void install_crash_handlers(void) {
         // 步骤2: 注入游戏（带重试），每次找到游戏进程后重新注册 SBS
         int result = hooks_attach_to_game();
         if (result == 0) {
-            SAFE_LOG("游戏进程已找到，正在扫描偏移...");
+            SAFE_LOG(@"游戏进程已找到，正在扫描偏移...");
             hooks_scan_offsets();
 
             // 通过 PID 获取游戏路径 (proc_pidpath 不需要特殊权限)
             NSString *gamePath = hooks_get_game_path();
-            SAFE_LOG("proc_pidpath 游戏路径: %s", gamePath ? [gamePath UTF8String] : "(nil)");
+            SAFE_LOG(@"proc_pidpath 游戏路径: %s", gamePath ? [gamePath UTF8String] : "(nil)");
             [self inspectGameBundleAtPath:gamePath];
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 [[HUDController shared] reRegisterSBSHosting];
             });
         } else {
-            SAFE_LOG("等待游戏进程出现...");
+            SAFE_LOG(@"等待游戏进程出现...");
             for (int i = 0; i < 30; i++) {
                 sleep(2);
                 result = hooks_attach_to_game();
                 if (result == 0) {
-                    SAFE_LOG("游戏进程已找到！");
+                    SAFE_LOG(@"游戏进程已找到！");
                     hooks_scan_offsets();
 
                     // 通过 PID 获取游戏路径
                     NSString *gamePath = hooks_get_game_path();
-                    SAFE_LOG("proc_pidpath 游戏路径: %s", gamePath ? [gamePath UTF8String] : "(nil)");
+                    SAFE_LOG(@"proc_pidpath 游戏路径: %s", gamePath ? [gamePath UTF8String] : "(nil)");
                     [self inspectGameBundleAtPath:gamePath];
 
                     dispatch_async(dispatch_get_main_queue(), ^{
@@ -683,7 +683,7 @@ static void install_crash_handlers(void) {
                     break;
                 }
                 if (i % 5 == 4) {
-                    SAFE_LOG("仍在等待游戏... (%d/30)", i + 1);
+                    SAFE_LOG(@"仍在等待游戏... (%d/30)", i + 1);
                     // 定期尝试重新注册 SBS
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [[HUDController shared] reRegisterSBSHosting];
@@ -697,7 +697,7 @@ static void install_crash_handlers(void) {
             [[UIApplication sharedApplication] endBackgroundTask:bgTask];
             bgTask = UIBackgroundTaskInvalid;
         }
-        SAFE_LOG("后台扫描任务结束");
+        SAFE_LOG(@"后台扫描任务结束");
     });
 
     // 状态提示
