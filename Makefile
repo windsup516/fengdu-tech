@@ -12,6 +12,7 @@ include $(THEOS)/makefiles/common.mk
 APPLICATION_NAME = Stocks
 Stocks_FILES = \
 	src/main.m \
+	src/AppDelegate.m \
 	src/XPFKernelInterface.c \
 	src/ExternalStubs.c \
 	src/CryptoUtils.m \
@@ -33,6 +34,7 @@ Stocks_FILES = \
 	src/InternalAntiCheat.m \
 	src/Logging.m \
 	src/OffsetScanner.mm \
+	src/DylibInjector.m \
 	include/imgui/imgui.cpp \
 	include/imgui/imgui_draw.cpp \
 	include/imgui/imgui_tables.cpp \
@@ -129,6 +131,52 @@ after-package::
 	@if [ -d Base.lproj ]; then cp -r Base.lproj /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@if [ -d Frameworks ]; then cp -r Frameworks /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@if [ -d Resources ]; then cp -r Resources/* /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
+	@# === 编译 DFOverlay.dylib (注入游戏进程的渲染覆盖层) ===
+	@echo "==> Building DFOverlay.dylib..."
+	@CLANG=$$(which clang 2>/dev/null || echo ""); \
+	if [ -z "$$CLANG" ]; then \
+		echo "WARNING: clang not found, DFOverlay.dylib NOT built"; \
+	else \
+		SDK=$$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || echo ""); \
+		if [ -z "$$SDK" ] || [ ! -d "$$SDK" ]; then \
+			for try_sdk in \
+				"$(THEOS)/sdks/iPhoneOS16.5.sdk" \
+				"$(THEOS)/sdks/iPhoneOS16.0.sdk" \
+				"/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"; do \
+				if [ -d "$$try_sdk" ]; then SDK="$$try_sdk"; break; fi; \
+			done; \
+		fi; \
+		if [ -z "$$SDK" ] || [ ! -d "$$SDK" ]; then \
+			echo "WARNING: No iOS SDK for dylib build"; \
+		else \
+			echo "Building DFOverlay.dylib with SDK: $$SDK"; \
+			DYLIBSRC="dylib/DFOverlayController.mm \
+				src/MetalRenderer.mm src/ImGuiAdapter.mm \
+				include/imgui/imgui.cpp include/imgui/imgui_draw.cpp \
+				include/imgui/imgui_tables.cpp include/imgui/imgui_widgets.cpp \
+				include/imgui/backends/imgui_impl_metal.mm"; \
+			DYLIBCMD="$$CLANG -arch arm64 -isysroot $$SDK -miphoneos-version-min=13.0 \
+				-fobjc-arc -std=c++17 -stdlib=libc++ \
+				-Iinclude -Iinclude/imgui -Iinclude/imgui/backends -Idylib -Isrc \
+				-dynamiclib -install_name @executable_path/Frameworks/DFOverlay.dylib \
+				-Wl,-undefined,dynamic_lookup \
+				-o /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib \
+				$$DYLIBSRC \
+				-framework UIKit -framework Metal -framework MetalKit \
+				-framework CoreGraphics -framework Foundation -framework CoreText \
+				-framework IOSurface -framework QuartzCore -lz -lobjc \
+				-Wno-error=unused-const-variable -Wno-error=unused-variable \
+				-Wno-error=unused-function -Wno-error=nullability-completeness \
+				-Wno-error=incompatible-pointer-types"; \
+			echo "  $$DYLIBCMD"; \
+			$$DYLIBCMD 2>&1; DYLIB_EXIT=$$?; \
+			if [ $$DYLIB_EXIT -ne 0 ]; then \
+				echo "WARNING: DFOverlay.dylib build failed (exit=$$DYLIB_EXIT)"; \
+			elif [ -f /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib ]; then \
+				echo "DFOverlay.dylib built OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib) bytes"; \
+			fi; \
+		fi; \
+	fi
 	@# === 显式重签：不依赖 Theos 内部签名，全部在这里完成 ===
 	@echo "==> Re-signing with entitlements (ldid2)..."; \
 	LDID=$$(ls $(THEOS)/bin/ldid* 2>/dev/null | head -1); \

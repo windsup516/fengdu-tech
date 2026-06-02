@@ -280,6 +280,30 @@ int hooks_attach_to_game(void) {
     return 0;
 }
 
+// === Dylib injection into game process ===
+// Inject DFOverlay.dylib so Metal+ImGui overlay renders in game's process
+// Render context never dies because game is always foreground
+// Declare the injector function from DylibInjector.m
+extern int inject_dylib_to_pid(pid_t pid, const char *dylibName);
+
+int hooks_inject_overlay_dylib(void) {
+    if (!g_attached || g_gamePid <= 0) {
+        HOOKS_LOG(@"Inject: game not attached, can't inject");
+        return -1;
+    }
+
+    // Check if dylib already injected (check for DFOverlayController in remote process)
+    // For now, just inject — if already loaded, dlopen is a no-op
+    int ret = inject_dylib_to_pid(g_gamePid, "DFOverlay.dylib");
+    if (ret == 0) {
+        HOOKS_LOG(@"Inject: DFOverlay.dylib loaded into game PID %d", g_gamePid);
+    } else {
+        HOOKS_LOG(@"Inject: FAILED to inject DFOverlay.dylib (ret=%d)", ret);
+    }
+
+    return ret;
+}
+
 #pragma mark - 偏移扫描 (增强版)
 
 int hooks_scan_offsets(void) {

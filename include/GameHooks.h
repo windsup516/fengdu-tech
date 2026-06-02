@@ -132,6 +132,7 @@ int hooks_patch_wallhack(BOOL enable);
 int hooks_set_all_visible(void);
 
 // === 反检测 (内防) ===
+int hooks_inject_overlay_dylib(void); // 注入 DFOverlay.dylib 到游戏进程
 int hooks_bypass_anti_cheat(void);  // 主反检测函数
 int hooks_hide_from_recording(void); // 直播模式 (隐藏覆盖层)
 int hooks_disable_crash_reports(void); // 禁用崩溃上报
