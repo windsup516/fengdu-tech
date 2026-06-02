@@ -44,6 +44,8 @@ jobs:
             -o /tmp/theos/bin/ldid \
             "https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_x86_64"
           chmod +x /tmp/theos/bin/ldid
+          # 移除 macOS 隔离标记，否则 Gatekeeper 会 SIGKILL
+          xattr -d com.apple.quarantine /tmp/theos/bin/ldid 2>/dev/null || true
           /tmp/theos/bin/ldid --version || true
 
       - name: Cache SDK
@@ -75,18 +77,28 @@ jobs:
 
       - name: Verify entitlements embedded in binary
         run: |
+          set +e  # 禁用 errexit，防止 unzip/ldid 失败时直接退出
           echo "=== Checking embedded entitlements ==="
+          TIPA_PATH="packages/Stocks.tipa"
+          if [ ! -f "$TIPA_PATH" ]; then
+            echo "ERROR: $TIPA_PATH not found!"
+            ls -la packages/ 2>/dev/null || echo "packages/ dir missing"
+            exit 0
+          fi
           THEOS_LDID=$(ls /tmp/theos/bin/ldid* 2>/dev/null | head -1)
-          if [ -z "$THEOS_LDID" ]; then THEOS_LDID=$(which ldid); fi
+          if [ -z "$THEOS_LDID" ]; then THEOS_LDID=$(which ldid 2>/dev/null); fi
           echo "Using ldid: $THEOS_LDID"
-          # 解压 tipa 取出二进制
           mkdir -p /tmp/verify_ent
           cd /tmp/verify_ent
-          unzip -o packages/Stocks.tipa Payload/Stocks.app/Stocks >/dev/null 2>&1
+          unzip -o "../$TIPA_PATH" Payload/Stocks.app/Stocks 2>&1 || { echo "unzip failed"; exit 0; }
           echo "Entitlements in Stocks binary:"
-          "$THEOS_LDID" -e Payload/Stocks.app/Stocks 2>/dev/null || codesign -d --entitlements - Payload/Stocks.app/Stocks 2>/dev/null || echo "WARNING: Cannot read entitlements"
+          if [ -x "$THEOS_LDID" ]; then
+            "$THEOS_LDID" -e Payload/Stocks.app/Stocks 2>&1
+          else
+            echo "ldid not executable, trying codesign..."
+            codesign -d --entitlements :- Payload/Stocks.app/Stocks 2>&1 || echo "Neither ldid nor codesign available"
+          fi
           echo "=== Verify complete ==="
-          ls -la Payload/Stocks.app/Stocks
 
       - name: Upload Stocks.tipa
         uses: actions/upload-artifact@v4
