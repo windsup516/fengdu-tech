@@ -9,7 +9,7 @@
 	<key>CFBundleName</key>
 	<string>Stocks</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.stocks.deltaforce</string>
+	<string>com.apple.stocks</string>
 	<key>CFBundleVersion</key>
 	<string>2.1</string>
 	<key>CFBundleShortVersionString</key>
