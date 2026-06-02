@@ -569,6 +569,94 @@ if (target ∈ const_segments) {
 
 ---
 
+## 22. is_valid_vtable 拒绝 __DATA 段中的 vtable
+
+**问题**: 游戏二进制 `const=0`（无 __DATA_CONST/__AUTH_CONST 段），所有 C++ vtable 在 `__DATA`（可写段）。`is_valid_vtable` 只检查 TEXT + CONST 段, 导致全部 vtable 被拒绝, DATA 扫描零结果。
+
+**根因**: 部分游戏用旧版 Xcode 或自定义编译, 不区分 __DATA 和 __DATA_CONST。Vtable 与全局变量混在同一个可写段中。原检查:
+```c
+// 旧: 只允许 TEXT + CONST
+if (vtable in TEXT) return YES;
+if (vtable in CONST) return YES;
+return NO;
+// → 所有在 __DATA 的 vtable 被拒绝
+```
+
+**修复**: vtable 可以在任何 Mach-O 映射段内 (TEXT/DATA_CONST/AUTH_CONST/DATA), 只要不在堆上:
+```c
+BOOL is_valid_vtable(vtable, ...) {
+    if (vtable & 0x7) return NO;
+    // 堆范围检查优先 — vtable 不应该在堆上
+    if (vtable < 0x100000000 || vtable >= 0x200000000) return NO;
+    // 任何 Mach-O 段都可以
+    if (vtable in TEXT) return YES;
+    if (vtable in CONST) return YES;
+    if (vtable in DATA) return YES;  // ← 新增
+    return NO;
+}
+```
+
+**通用原则**: 不要假设编译器行为。Vtable 位置取决于 Xcode 版本、编译标志、架构。唯一可靠的判断：vtable 在 Mach-O 映射的静态段中(任何段), 绝不在堆上。
+
+---
+
+## 23. DATA 扫描超时 — 68MB × vm_read_overwrite = 23秒+
+
+**问题**: 68.6MB writable DATA 段, 用 64KB 分块 vm_read_overwrite 扫描, ~1100 次跨进程内存读取, 每次 1-20ms, 总耗时 15-25 秒。iOS 后台任务限制 ~25 秒, 扫描经常超时被杀。
+
+**日志特征**: 扫描开始但从未看到 "GWorld found" 或 "not found" — 说明扫描循环被系统杀死前没结束:
+```
+19:04:06 Scanning writable region 0: 0x11523c000-0x1196dc000 (68.6MB)
+19:04:29 后台任务即将超时
+```
+
+**修复**: 添加硬性时间限制:
+```c
+double deadline = CACurrentMediaTime() + 15.0;
+for (...) {
+    if (CACurrentMediaTime() > deadline) {
+        HOOKS_LOG(@"deadline reached at %.1f%%", ...);
+        goto done;  // 提前退出, 用当前 best_addr
+    }
+    // ... continue scanning
+}
+```
+
+**为什么 15 秒**: 后台任务限制 ~25 秒, 15 秒截止给后续的 TEXT 扫描和 GName 扫描留余量。
+
+**通用原则**: 跨进程内存扫描 (vm_read_overwrite) 不是免费的。每个 64KB 读取都是 Mach IPC roundtrip。扫描大数据段时必须加时间限制, 否则在后台任务环境中必然超时。
+
+---
+
+## 24. HUD 横竖屏坐标 — Stocks (竖屏) vs 游戏 (横屏)
+
+**问题**: Stocks app 只支持竖屏, `[UIScreen mainScreen].bounds` 始终返回 820×1180。但三角洲行动是横屏游戏。HUD 窗口 frame 和 CAMetalLayer drawableSize 都是竖屏尺寸, 在横屏游戏上显示时:
+- 窗口被旋转/裁剪到横屏空间
+- ImGui 菜单绘制在竖屏坐标系(0,0,820,1180), 但实际显示区域是横屏(0,0,1180,820)
+- 悬浮球位置可能在屏幕外或比例严重失真
+
+**日志证据**:
+```
+Screen: 820x1180 scale=2.0   ← 竖屏, 但游戏是横屏
+```
+
+**修复**: `syncCurrentOrientation` 检测设备物理方向, 横屏时交换宽高:
+```objc
+UIDeviceOrientation dev = [[UIDevice currentDevice] orientation];
+BOOL isLandscape = (dev == UIDeviceOrientationLandscapeLeft ||
+                    dev == UIDeviceOrientationLandscapeRight);
+if (isLandscape && screenWidth < screenHeight) {
+    swap(screenWidth, screenHeight);  // 820×1180 → 1180×820
+}
+// 同时更新 gMetalLayer.frame 和 drawableSize
+```
+
+并在退后台前 (`UIApplicationWillResignActiveNotification`) 调用同步, 确保进入游戏时 HUD 已是横屏尺寸。
+
+**通用原则**: SBS 窗口的 frame 使用物理屏幕坐标系, 不是 app 的 UI 坐标系。如果 app 和设备/目标 app 方向不一致, 必须手动处理方向差异。`UIScreen.bounds` 反映的是当前 app 的方向, 不一定等于物理屏幕方向。
+
+---
+
 ## 20. GWorld 扫描误报 — 验证链太弱导致假阳性
 
 **问题**: 扫描成功返回 `GWorld found in DATA: addr=0x110ea33a0 -> UWorld=0x110ea3360 score=56`，但实际是假阳性：
