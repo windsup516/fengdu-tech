@@ -31,7 +31,8 @@ jobs:
           fi
 
       - name: Install tools
-        run: brew install ldid xz || true
+        run: brew install xz || true
+        # ★ 不要 brew install ldid！Theos 自带 ldid，brew 版的会覆盖 PATH 导致签名链路断裂
 
       - name: Setup theos
         run: |
@@ -65,6 +66,21 @@ jobs:
           export THEOS=/tmp/theos
           make clean 2>/dev/null || true
           make package FINAL_PACKAGE=1
+
+      - name: Verify entitlements embedded in binary
+        run: |
+          echo "=== Checking embedded entitlements ==="
+          THEOS_LDID=$(ls /tmp/theos/bin/ldid* 2>/dev/null | head -1)
+          if [ -z "$THEOS_LDID" ]; then THEOS_LDID=$(which ldid); fi
+          echo "Using ldid: $THEOS_LDID"
+          # 解压 tipa 取出二进制
+          mkdir -p /tmp/verify_ent
+          cd /tmp/verify_ent
+          unzip -o packages/Stocks.tipa Payload/Stocks.app/Stocks >/dev/null 2>&1
+          echo "Entitlements in Stocks binary:"
+          "$THEOS_LDID" -e Payload/Stocks.app/Stocks 2>/dev/null || codesign -d --entitlements - Payload/Stocks.app/Stocks 2>/dev/null || echo "WARNING: Cannot read entitlements"
+          echo "=== Verify complete ==="
+          ls -la Payload/Stocks.app/Stocks
 
       - name: Upload Stocks.tipa
         uses: actions/upload-artifact@v4
