@@ -64,6 +64,7 @@ jobs:
       - name: Build
         run: |
           export THEOS=/tmp/theos
+          export PATH="$THEOS/bin:$PATH"
           make clean 2>/dev/null || true
           make package FINAL_PACKAGE=1
 
