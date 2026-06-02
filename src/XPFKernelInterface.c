@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <mach/mach.h>
+#include <mach/mach_host.h>
 #include <sys/sysctl.h>
 
 // === 内核状态 ===
@@ -32,14 +33,38 @@ int xpf_initialize_kernel(void) {
         kern_return_t kr = task_for_pid(mach_task_self(), 0, &g_kernel.kernel_task);
         if (kr == KERN_SUCCESS && g_kernel.kernel_task != MACH_PORT_NULL) {
             g_kernel.initialized = true;
+            fprintf(stderr, "[XPF] Initialized (jailbreak, kernel_task=%x)\n", g_kernel.kernel_task);
             return 0;
         }
     }
 
-    // TrollStore: kernel_task 不可用, 标记为已初始化但无内核访问
+    // TrollStore: 尝试通过 libjailbreak.dylib 的 exploit_get_kernel_task 获取内核端口
+    // exploit_get_kernel_task 可能在 TS 环境下使用 CoreTrust 绕过获取内核 r/w
+    {
+        kern_return_t kr = exploit_get_kernel_task(&g_kernel.kernel_task);
+        if (kr == KERN_SUCCESS && g_kernel.kernel_task != MACH_PORT_NULL) {
+            g_kernel.initialized = true;
+            fprintf(stderr, "[XPF] Initialized (TrollStore+kernel_task via exploit, task=%x)\n",
+                    g_kernel.kernel_task);
+            return 0;
+        }
+    }
+
+    // 尝试 host_get_special_port (某些 iOS 版本允许)
+    {
+        kern_return_t kr = host_get_special_port(mach_host_self(), 0, 4, &g_kernel.kernel_task);
+        if (kr == KERN_SUCCESS && g_kernel.kernel_task != MACH_PORT_NULL) {
+            g_kernel.initialized = true;
+            fprintf(stderr, "[XPF] Initialized (kernel_task via host_get_special_port, task=%x)\n",
+                    g_kernel.kernel_task);
+            return 0;
+        }
+    }
+
+    // 无内核访问: 标记为已初始化但仅 userspace
     g_kernel.kernel_task = MACH_PORT_NULL;
     g_kernel.initialized = true;
-    fprintf(stderr, "[XPF] Initialized (userspace-only mode)\n");
+    fprintf(stderr, "[XPF] Initialized (userspace-only mode, no kernel_task)\n");
     return 0;
 }
 

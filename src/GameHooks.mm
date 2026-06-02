@@ -1,12 +1,14 @@
 // GameHooks - Delta Force 游戏内存钩子 (TrollStore 兼容版)
-// 使用 mach_vm_read/write (无需内核 exploit)
+// 使用 mach_vm_read/write + sysctl 进程枚举
 // 支持运行时特征码扫描定位偏移
 
 #import "GameHooks.h"
 #import "XPFKernelInterface.h"
 #import <mach/mach.h>
+#import <mach/mach_host.h>
 #import <mach/vm_map.h>
 #import <mach-o/loader.h>
+#import <sys/sysctl.h>
 
 #import <dlfcn.h>
 
@@ -77,22 +79,81 @@ static void hooks_log(NSString *fmt, ...) {
 
 #pragma mark - 进程查找与附加
 
-// 通过进程名查找 PID — 三层 fallback
-//   1. proc_listallpids (libproc, 不走 sysctl)
-//   2. proc_listpids(PROC_ALL_PIDS) 备选
-//   3. PID 暴力扫描 (task_for_pid + proc_name)
+// 通过进程名查找 PID — 四层 fallback (sysctl 优先, 绕过 sandbox)
+//   1. sysctl(KERN_PROC_ALL) — 不同内核路径, 大概率绕过 sandbox
+//   2. proc_listallpids (libproc)
+//   3. proc_listpids(PROC_ALL_PIDS) 备选
+//   4. PID 暴力扫描 (proc_pidpath)
 static pid_t find_pid_by_name_multi(const char **names) {
-    int pidbuf[1024];
-    int npids = 0;
     static BOOL dumpedOnce = NO;
 
-    // === 方法1: proc_listallpids ===
+    // === 方法1: sysctl(KERN_PROC_ALL) — 绕过 sandbox 的关键 ===
+    // sysctl 和 proc_listallpids 使用不同的内核路径
+    // proc_listallpids 走 proc_info 系统调用 (被 sandbox 拦截)
+    // sysctl(KERN_PROC_ALL) 走 sysctl 系统调用 (通常不被拦截)
+    {
+        int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
+        size_t bufSize = 0;
+        if (sysctl(mib, 4, NULL, &bufSize, NULL, 0) == 0 && bufSize > 0) {
+            struct kinfo_proc *procs = (struct kinfo_proc *)malloc(bufSize);
+            if (procs) {
+                if (sysctl(mib, 4, procs, &bufSize, NULL, 0) == 0) {
+                    int count = (int)(bufSize / sizeof(struct kinfo_proc));
+                    hooks_log(@"sysctl(KERN_PROC_ALL): got %d processes", count);
+
+                    if (!dumpedOnce) {
+                        dumpedOnce = YES;
+                        hooks_log(@"=== All running processes via sysctl (first 200 of %d) ===", count);
+                        for (int i = 0; i < count && i < 200; i++) {
+                            hooks_log(@"  [%d] %s", procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm);
+                        }
+                        hooks_log(@"=== End process list ===");
+                    }
+
+                    // 精确匹配
+                    for (int i = 0; i < count; i++) {
+                        const char *pname = procs[i].kp_proc.p_comm;
+                        if (!pname || pname[0] == '\0') continue;
+                        for (const char **n = names; *n; n++) {
+                            if (strcasecmp(pname, *n) == 0) {
+                                pid_t found = procs[i].kp_proc.p_pid;
+                                hooks_log(@"sysctl found: '%s' PID=%d", pname, found);
+                                free(procs);
+                                return found;
+                            }
+                        }
+                    }
+
+                    // 子串匹配
+                    for (int i = 0; i < count; i++) {
+                        const char *pname = procs[i].kp_proc.p_comm;
+                        if (strcasestr(pname, "delta") || strcasestr(pname, "dfm") ||
+                            strcasestr(pname, "tmgp") || strcasestr(pname, "force") ||
+                            strcasestr(pname, "star")) {
+                            pid_t found = procs[i].kp_proc.p_pid;
+                            hooks_log(@"sysctl substring: '%s' PID=%d", pname, found);
+                            free(procs);
+                            return found;
+                        }
+                    }
+                } else {
+                    hooks_log(@"sysctl(KERN_PROC_ALL) second call failed, errno=%d", errno);
+                }
+                free(procs);
+            }
+        } else {
+            hooks_log(@"sysctl(KERN_PROC_ALL) size query failed, errno=%d", errno);
+        }
+    }
+
+    // === 方法2: proc_listallpids ===
+    int pidbuf[1024];
+    int npids = 0;
     errno = 0;
     npids = proc_listallpids(pidbuf, sizeof(pidbuf));
-    hooks_log(@"proc_listallpids: ret=%d errno=%d bufsize=%zu",
-              npids, errno, sizeof(pidbuf));
+    hooks_log(@"proc_listallpids: ret=%d errno=%d", npids, errno);
 
-    // === 方法2: proc_listpids (fallback) ===
+    // === 方法3: proc_listpids (fallback) ===
     if (npids <= 0) {
         hooks_log(@"proc_listallpids returned %d, trying proc_listpids...", npids);
         errno = 0;
@@ -100,100 +161,66 @@ static pid_t find_pid_by_name_multi(const char **names) {
         hooks_log(@"proc_listpids: ret=%d errno=%d", npids, errno);
     }
 
-    // === 方法3: PID 暴力扫描 (proc_pidpath / proc_name) ===
-    // task_for_pid 在此环境被完全封堵(kr=5), 改用 libproc 单点查询
-    if (npids <= 0) {
-        hooks_log(@"libproc enumeration failed, falling back to PID brute force (proc_pidpath)...");
-
-        // 自测: proc_pidpath 对 PID 1 是否可用
-        {
-            char testPath[PROC_PIDPATHINFO_MAXSIZE] = {0};
-            errno = 0;
-            int testRet = proc_pidpath(1, testPath, sizeof(testPath));
-            hooks_log(@"Brute force self-test: proc_pidpath(1) ret=%d errno=%d path=%s",
-                      testRet, errno, testRet > 0 ? testPath : "(fail)");
+    if (npids > 0) {
+        for (int i = 0; i < npids; i++) {
+            char pname[64] = {0};
+            proc_name(pidbuf[i], pname, sizeof(pname) - 1);
+            if (pname[0] == '\0') continue;
+            for (const char **n = names; *n; n++) {
+                if (strcasecmp(pname, *n) == 0) {
+                    hooks_log(@"proc_list found: '%s' PID=%d", pname, pidbuf[i]);
+                    return pidbuf[i];
+                }
+            }
         }
+        for (int i = 0; i < npids; i++) {
+            char pname[64] = {0};
+            proc_name(pidbuf[i], pname, sizeof(pname) - 1);
+            if (strcasestr(pname, "delta") || strcasestr(pname, "dfm") ||
+                strcasestr(pname, "tmgp") || strcasestr(pname, "force") ||
+                strcasestr(pname, "star")) {
+                hooks_log(@"proc_list substring: '%s' PID=%d", pname, pidbuf[i]);
+                return pidbuf[i];
+            }
+        }
+    }
 
+    // === 方法4: PID 暴力扫描 (proc_pidpath, 最后手段) ===
+    {
+        hooks_log(@"All enumeration methods failed, falling back to PID brute force...");
         pid_t bf_found = -1;
         int scanned = 0, pathOk = 0;
 
         for (pid_t p = 1; p < 3000; p++) {
-            // 先用 proc_pidpath 测试 PID 是否存在 (不依赖 task_for_pid)
             char ppath[PROC_PIDPATHINFO_MAXSIZE] = {0};
             int ppRet = proc_pidpath(p, ppath, sizeof(ppath));
             if (ppRet <= 0) continue;
             pathOk++;
 
-            // 从路径提取进程名 (最后一段去掉 .app/ 后的可执行文件名)
             NSString *fullPath = [NSString stringWithUTF8String:ppath];
             NSString *execName = [[fullPath lastPathComponent] stringByDeletingPathExtension];
             const char *pname = [execName UTF8String];
             if (!pname || pname[0] == '\0') continue;
             scanned++;
 
-            // 精确匹配所有候选名
             for (const char **n = names; *n; n++) {
                 if (strcasecmp(pname, *n) == 0) {
                     bf_found = p;
-                    hooks_log(@"Brute force proc_pidpath found: '%s' PID=%d (scanned=%d pathOk=%d)",
+                    hooks_log(@"Brute force found: '%s' PID=%d (scanned=%d pathOk=%d)",
                               pname, p, scanned, pathOk);
                     return bf_found;
                 }
             }
-            // 子串匹配兜底
             if (strcasestr(pname, "delta") || strcasestr(pname, "dfm") ||
                 strcasestr(pname, "tmgp") || strcasestr(pname, "force")) {
                 bf_found = p;
-                hooks_log(@"Brute force proc_pidpath substring: '%s' PID=%d (scanned=%d pathOk=%d)",
+                hooks_log(@"Brute force substring: '%s' PID=%d (scanned=%d pathOk=%d)",
                           pname, p, scanned, pathOk);
                 return bf_found;
             }
         }
         hooks_log(@"PID brute force exhausted: scanned=%d proc_pidpath_ok=%d", scanned, pathOk);
         return bf_found;
-    }
-
-    int count = npids;
-    if (!dumpedOnce) {
-        dumpedOnce = YES;
-        hooks_log(@"=== All running processes (first 200 of %d) ===", count);
-        for (int i = 0; i < count && i < 200; i++) {
-            char pname[64] = {0};
-            proc_name(pidbuf[i], pname, sizeof(pname) - 1);
-            hooks_log(@"  [%d] %s", pidbuf[i], pname);
-        }
-        hooks_log(@"=== End process list ===");
-    }
-
-    pid_t found = -1;
-
-    for (int i = 0; i < count; i++) {
-        char pname[64] = {0};
-        proc_name(pidbuf[i], pname, sizeof(pname) - 1);
-        if (pname[0] == '\0') continue;
-
-        for (const char **n = names; *n; n++) {
-            if (strcasecmp(pname, *n) == 0) {
-                found = pidbuf[i];
-                hooks_log(@"Found game process: '%s' PID=%d (matched '%s')",
-                          [NSString stringWithUTF8String:pname], found,
-                          [NSString stringWithUTF8String:*n]);
-                return found;
-            }
-        }
-    }
-
-    for (int i = 0; i < count; i++) {
-        char pname[64] = {0};
-        proc_name(pidbuf[i], pname, sizeof(pname) - 1);
-        if (strcasestr(pname, "delta") || strcasestr(pname, "dfm") ||
-            strcasestr(pname, "tmgp") || strcasestr(pname, "force") ||
-            strcasestr(pname, "star")) {
-            found = pidbuf[i];
-            hooks_log(@"Found game process via substring: '%s' PID=%d",
-                      [NSString stringWithUTF8String:pname], found);
-            return found;
-        }
     }
 
     return -1;
@@ -209,14 +236,43 @@ int hooks_attach_to_game(void) {
     }
 
     g_gamePid = pid;
+    g_gameTask = MACH_PORT_NULL;
+
+    // === 方法1: 标准 task_for_pid (需要 no-sandbox, TrollStore 下大概率 kr=5) ===
     kern_return_t kr = task_for_pid(mach_task_self(), pid, &g_gameTask);
-    if (kr != KERN_SUCCESS) {
-        hooks_log(@"task_for_pid(%d) failed: %d, trying kernel task attach...", pid, kr);
+    hooks_log(@"task_for_pid(%d): kr=%d task=%x", pid, kr, g_gameTask);
+
+    if (kr != KERN_SUCCESS || g_gameTask == MACH_PORT_NULL) {
+        // === 方法2: 尝试 xpf_attach_kernel_task (来自 libjailbreak.dylib 的真实实现) ===
+        // 真实 dylib 版本可能使用内核 exploit 获取 task port
+        hooks_log(@"task_for_pid failed (kr=%d), trying xpf_attach_kernel_task...", kr);
         kr = xpf_attach_kernel_task((uint64_t)pid, &g_gameTask);
+        hooks_log(@"xpf_attach_kernel_task: kr=%d task=%x", kr, g_gameTask);
+
         if (kr != KERN_SUCCESS || g_gameTask == MACH_PORT_NULL) {
-            hooks_log(@"kernel task attach also failed: %d task=%x", kr, g_gameTask);
-            g_attached = YES;
-            return 0;
+            // === 方法3: 尝试获取 kernel_task 本身 ===
+            // 如果 libjailbreak 提供内核 exploit, 直接用 kernel_task 做内存 r/w
+            mach_port_t kernel_task = MACH_PORT_NULL;
+            kern_return_t ktkr = exploit_get_kernel_task(&kernel_task);
+            hooks_log(@"exploit_get_kernel_task: kr=%d task=%x", ktkr, kernel_task);
+
+            if (ktkr == KERN_SUCCESS && kernel_task != MACH_PORT_NULL) {
+                // 有 kernel_task: 可以通过物理地址或内核虚拟地址直接读写游戏内存
+                // 需要配合 libjailbreak 的 physread64 / kern_reading(kernel_task, ...)
+                g_gameTask = kernel_task;
+                hooks_log(@"Using kernel_task for game memory access (bypasses sandbox)");
+            } else {
+                // === 方法4: 尝试 host_get_special_port (TrollStore 可能不拦截) ===
+                kr = host_get_special_port(mach_host_self(), 0, 4, &g_gameTask);
+                hooks_log(@"host_get_special_port(HOST_KERNEL_PORT): kr=%d task=%x", kr, g_gameTask);
+
+                if (kr != KERN_SUCCESS || g_gameTask == MACH_PORT_NULL) {
+                    hooks_log(@"ALL task port methods failed — memory patches will be unavailable");
+                    hooks_log(@"Process PID=%d found but inaccessible (sandbox active)", pid);
+                    g_attached = YES;
+                    return 0;
+                }
+            }
         }
     }
 
@@ -493,15 +549,27 @@ uint64_t xpf_scan_game_memory(mach_port_t task, const char *pattern, size_t leng
 
 static kern_return_t game_read(mach_port_t task, uint64_t addr, void *buf, size_t size) {
     if (!buf || size == 0) return KERN_INVALID_ARGUMENT;
-    vm_size_t outSize = (vm_size_t)size;
-    return vm_read_overwrite(task, (vm_address_t)addr, (vm_size_t)size,
-                              (vm_address_t)buf, &outSize);
+    // 使用 kern_reading (优先 dylib 版本, 可能支持 kernel_task 地址翻译)
+    size_t sz = size;
+    kern_return_t kr = kern_reading(task, addr, buf, &sz);
+    if (kr != KERN_SUCCESS) {
+        // fallback: 直接 vm_read_overwrite
+        vm_size_t outSize = (vm_size_t)size;
+        kr = vm_read_overwrite(task, (vm_address_t)addr, (vm_size_t)size,
+                                (vm_address_t)buf, &outSize);
+    }
+    return kr;
 }
 
 static kern_return_t game_write(mach_port_t task, uint64_t addr, const void *buf, size_t size) {
     if (!buf || size == 0) return KERN_INVALID_ARGUMENT;
-    return vm_write(task, (vm_address_t)addr, (vm_offset_t)buf,
-                    (mach_msg_type_number_t)size);
+    // 使用 kern_writing (优先 dylib 版本)
+    kern_return_t kr = kern_writing(task, addr, (void *)buf, size);
+    if (kr != KERN_SUCCESS) {
+        kr = vm_write(task, (vm_address_t)addr, (vm_offset_t)buf,
+                      (mach_msg_type_number_t)size);
+    }
+    return kr;
 }
 
 #pragma mark - 公开查询

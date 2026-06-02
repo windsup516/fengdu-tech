@@ -12,6 +12,7 @@
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import <objc/message.h>
+#import <sys/sysctl.h>
 #import <CommonCrypto/CommonDigest.h>
 
 // SecTask API — Security.framework 私有头，手动声明
@@ -534,6 +535,40 @@ static void install_crash_handlers(void) {
         errno = 0;
         int testN2 = proc_listpids(1 /* PROC_ALL_PIDS */, 0, pidbuf, sizeof(pidbuf));
         SAFE_LOG("Test6 proc_listpids: ret=%d errno=%d", testN2, errno);
+
+        // 测试7: sysctl(KERN_PROC_ALL) — 绕过 sandbox 的关键路径
+        {
+            int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
+            size_t bufSize = 0;
+            errno = 0;
+            int sRet = sysctl(mib, 4, NULL, &bufSize, NULL, 0);
+            SAFE_LOG("Test7 sysctl(KERN_PROC_ALL) size query: ret=%d errno=%d bufSize=%zu", sRet, errno, bufSize);
+            if (sRet == 0 && bufSize > 0) {
+                struct kinfo_proc *procs = (struct kinfo_proc *)malloc(bufSize);
+                if (procs) {
+                    sRet = sysctl(mib, 4, procs, &bufSize, NULL, 0);
+                    int count = (int)(bufSize / sizeof(struct kinfo_proc));
+                    SAFE_LOG("Test7 sysctl data: ret=%d errno=%d process_count=%d", sRet, errno, count);
+                    for (int i = 0; i < count && i < 5; i++) {
+                        SAFE_LOG("  [%d] %s", procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm);
+                    }
+                    free(procs);
+                }
+            }
+        }
+
+        // 测试8: exploit_get_kernel_task + host_get_special_port
+        {
+            mach_port_t kt = MACH_PORT_NULL;
+            kern_return_t kr = exploit_get_kernel_task(&kt);
+            SAFE_LOG("Test8 exploit_get_kernel_task: kr=%d task=%x", kr, kt);
+            if (kt != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), kt);
+
+            kt = MACH_PORT_NULL;
+            kr = host_get_special_port(mach_host_self(), 0, 4, &kt);
+            SAFE_LOG("Test8 host_get_special_port(HOST_KERNEL_PORT): kr=%d task=%x", kr, kt);
+            if (kt != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), kt);
+        }
 
         SAFE_LOG("=== Foreground diagnostic complete ===");
     }

@@ -8,6 +8,7 @@
 
 #include "XPFKernelInterface.h"
 #include <mach/mach.h>
+#include <mach/mach_host.h>
 #include <mach/vm_map.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -100,23 +101,29 @@ WEAK_STUB int jb_init(void) {
 
     if (env == 2) {
         fprintf(stderr, "[Stubs] jb_init: jailbreak detected\n");
-        // 越狱环境: 尝试获取 kernel_task
         mach_port_t kt = MACH_PORT_NULL;
         kern_return_t kr = task_for_pid(mach_task_self(), 0, &kt);
         if (kr == KERN_SUCCESS && kt != MACH_PORT_NULL) {
             mach_port_deallocate(mach_task_self(), kt);
             return 0;
         }
-        // 越狱但没有 tfp0, 降级使用 userspace
         return 0;
     }
 
     if (env == 1) {
-        fprintf(stderr, "[Stubs] jb_init: TrollStore detected, using userspace only\n");
+        fprintf(stderr, "[Stubs] jb_init: TrollStore detected\n");
+        // 尝试获取 kernel_task (libjailbreak.dylib 的真实 exploit 可能在此工作)
+        mach_port_t kt = MACH_PORT_NULL;
+        kern_return_t kr = exploit_get_kernel_task(&kt);
+        if (kr == KERN_SUCCESS && kt != MACH_PORT_NULL) {
+            fprintf(stderr, "[Stubs] jb_init: kernel_task available in TS mode (task=%x)\n", kt);
+            // 不 deallocate — 保留给后续 kern_reading/kern_writing 使用
+        } else {
+            fprintf(stderr, "[Stubs] jb_init: TS mode, no kernel_task (userspace only)\n");
+        }
         return 0;
     }
 
-    // 普通环境: 无任何特殊权限
     fprintf(stderr, "[Stubs] jb_init: normal environment, limited functionality\n");
     return 0;
 }
@@ -157,21 +164,38 @@ WEAK_STUB kern_return_t exploit_get_kernel_task(mach_port_t *task) {
 
     int env = detect_environment();
 
+    // 越狱: 标准路径
     if (env == 2) {
-        // 越狱环境: 尝试获取
         kern_return_t kr = task_for_pid(mach_task_self(), 0, task);
         if (kr == KERN_SUCCESS && *task != MACH_PORT_NULL) {
             return KERN_SUCCESS;
         }
-
         kr = host_get_special_port(mach_host_self(), 0, 4, task);
         if (kr == KERN_SUCCESS && *task != MACH_PORT_NULL) {
             return KERN_SUCCESS;
         }
     }
 
-    // TrollStore 或普通环境: 无内核访问
-    fprintf(stderr, "[Stubs] kernel_task not available in current environment\n");
+    // TrollStore: 尝试 host_get_special_port
+    // 某些 iOS 版本下, task_for_pid-allow + system-task-ports 可能允许此调用
+    if (env == 1) {
+        kern_return_t kr = host_get_special_port(mach_host_self(), 0, 4, task);
+        if (kr == KERN_SUCCESS && *task != MACH_PORT_NULL) {
+            fprintf(stderr, "[Stubs] kernel_task obtained via host_get_special_port in TS mode\n");
+            return KERN_SUCCESS;
+        }
+    }
+
+    // 通用 fallback: 尝试 task_for_pid(0) (很可能失败, 但不妨一试)
+    {
+        kern_return_t kr = task_for_pid(mach_task_self(), 0, task);
+        if (kr == KERN_SUCCESS && *task != MACH_PORT_NULL) {
+            fprintf(stderr, "[Stubs] kernel_task obtained via task_for_pid(0)\n");
+            return KERN_SUCCESS;
+        }
+    }
+
+    fprintf(stderr, "[Stubs] kernel_task not available (env=%d)\n", env);
     return KERN_FAILURE;
 }
 
@@ -205,11 +229,37 @@ WEAK_STUB void xpf_setup_kcall_primitive(void) {
 
 WEAK_STUB kern_return_t xpf_attach_kernel_task(uint64_t proc, mach_port_t *task) {
     if (!task) return KERN_INVALID_ARGUMENT;
-    if (!is_jailbroken()) {
-        *task = MACH_PORT_NULL;
-        return KERN_FAILURE;
+    *task = MACH_PORT_NULL;
+
+    pid_t pid = (pid_t)proc;
+
+    // 方法1: 直接 task_for_pid (越狱或 TrollStore 都可能失败)
+    kern_return_t kr = task_for_pid(mach_task_self(), pid, task);
+    if (kr == KERN_SUCCESS && *task != MACH_PORT_NULL) {
+        return KERN_SUCCESS;
     }
-    return task_for_pid(mach_task_self(), 0, task);
+
+    // 方法2: 通过 kernel_task 读取目标进程的 task port
+    // 如果有 kernel_task, 可以从内核内存直接读取目标进程的 ipc_entry
+    // 这需要 libjailbreak.dylib 的真实实现
+    mach_port_t kt = MACH_PORT_NULL;
+    if (exploit_get_kernel_task(&kt) == KERN_SUCCESS && kt != MACH_PORT_NULL) {
+        fprintf(stderr, "[Stubs] xpf_attach_kernel_task: have kernel_task=%x, need real dylib for kread\n", kt);
+        // 真实 dylib 的 kern_reading 可以读内核地址空间的 task 结构
+        // 这里作为 fallback, 返回 kernel_task 本身
+        // 调用者应使用 kern_reading(kernel_task, ...) 进行内存访问
+    }
+
+    // 方法3: host_get_special_port 获取游戏进程的 task port
+    // 在 TrollStore 下可能被拦截
+    kr = host_get_special_port(mach_host_self(), 0, pid, task);
+    if (kr == KERN_SUCCESS && *task != MACH_PORT_NULL) {
+        fprintf(stderr, "[Stubs] xpf_attach_kernel_task: got task via host_get_special_port\n");
+        return KERN_SUCCESS;
+    }
+
+    fprintf(stderr, "[Stubs] xpf_attach_kernel_task(%llu): all methods failed\n", proc);
+    return KERN_FAILURE;
 }
 
 #pragma mark - dylib 注入
