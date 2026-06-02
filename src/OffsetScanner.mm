@@ -567,7 +567,7 @@ static uint64_t scan_gworld_text_chunked(mach_port_t task, uint64_t text_start, 
             uint64_t pc = chunk_start + i * 4;
 
             uint64_t target = 0;
-            BOOL from_adrp = NO, from_movz = NO;
+            BOOL from_adrp __attribute__((unused)) = NO, from_movz = NO;
 
             // 模式 A: ADRP + LDR (传统 UE4 全局变量访问)
             if ((i0 & 0x9F000000) == 0x90000000 && (i1 & 0xFFC00000) == 0xF9400000) {
