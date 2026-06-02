@@ -151,7 +151,6 @@ after-package::
 		else \
 			echo "Building DFOverlay.dylib with SDK: $$SDK"; \
 			DYLIBSRC="dylib/DFOverlayController.mm \
-				src/MetalRenderer.mm src/ImGuiAdapter.mm \
 				include/imgui/imgui.cpp include/imgui/imgui_draw.cpp \
 				include/imgui/imgui_tables.cpp include/imgui/imgui_widgets.cpp \
 				include/imgui/backends/imgui_impl_metal.mm"; \

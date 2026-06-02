@@ -11,8 +11,6 @@ include $(THEOS)/makefiles/common.mk
 LIBRARY_NAME = DFOverlay
 DFOverlay_FILES = \
 	DFOverlayController.mm \
-	../src/MetalRenderer.mm \
-	../src/ImGuiAdapter.mm \
 	../include/imgui/imgui.cpp \
 	../include/imgui/imgui_draw.cpp \
 	../include/imgui/imgui_tables.cpp \
