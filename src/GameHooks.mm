@@ -281,7 +281,7 @@ int hooks_attach_to_game(void) {
 }
 
 // === Dylib injection into game process ===
-// Inject DFTest.dylib so Metal+ImGui overlay renders in game's process
+// Inject DFOverlay.dylib so Metal+ImGui overlay renders in game's process
 // Render context never dies because game is always foreground
 // Declare the injector function from DylibInjector.m
 extern "C" int inject_dylib_to_pid(pid_t pid, const char *dylibName);
@@ -299,12 +299,12 @@ int hooks_inject_overlay_dylib(void) {
     }
 
     HOOKS_LOG(@"========================================");
-    HOOKS_LOG(@">> INJECTING DFTest.dylib -> PID %d <<", g_gamePid);
+    HOOKS_LOG(@">> INJECTING DFOverlay.dylib -> PID %d <<", g_gamePid);
     HOOKS_LOG(@"========================================");
 
-    int ret = inject_dylib_to_pid(g_gamePid, "DFTest.dylib");
+    int ret = inject_dylib_to_pid(g_gamePid, "DFOverlay.dylib");
     if (ret == 0) {
-        HOOKS_LOG(@">>> DFTest.dylib INJECTED OK — check /tmp/dfoverlay.log in game <<<");
+        HOOKS_LOG(@">>> DFOverlay.dylib INJECTED OK — check /tmp/dfoverlay.log in game <<<");
     } else {
         HOOKS_LOG(@">>> INJECTION FAILED (ret=%d) — overlay will NOT appear <<<", ret);
     }

@@ -225,13 +225,16 @@ static void DFOverlayInit(void) {
         if ([NSThread isMainThread]) {
             [[DFOverlayController shared] startOverlay];
         } else {
-            dispatch_sync(dispatch_get_main_queue(), ^{
+            // Raw Mach thread has no pthread — dispatch_sync would CRASH.
+            // CFRunLoopPerformBlock just enqueues on main run loop, no blocking.
+            CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
                 @try {
                     [[DFOverlayController shared] startOverlay];
                 } @catch (NSException *e) {
                     dylib_log("CRASH in startOverlay: %s", [[e description] UTF8String]);
                 }
             });
+            CFRunLoopWakeUp(CFRunLoopGetMain());
         }
     } @catch (NSException *e) {
         dylib_log("CRASH in constructor: %s", [[e description] UTF8String]);
