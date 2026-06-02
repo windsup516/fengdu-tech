@@ -66,6 +66,28 @@ after-package::
 	@rm -rf /tmp/Stocks.tipa.work
 	@mkdir -p /tmp/Stocks.tipa.work/Payload/Stocks.app
 	@cp -rL $(THEOS_STAGING_DIR)/Applications/Stocks.app/* /tmp/Stocks.tipa.work/Payload/Stocks.app/
+	@# === 编译 + 捆绑 RootHelper ===
+	@echo "==> Compiling RootHelper..."
+	@SDK=$$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || echo ""); \
+	if [ -z "$$SDK" ]; then \
+		echo "WARNING: xcrun SDK not found, trying Theos SDK..."; \
+		SDK="$(THEOS)/sdks/iPhoneOS16.5.sdk"; \
+	fi; \
+	if [ -d "$$SDK" ]; then \
+		echo "Using SDK: $$SDK"; \
+		clang -arch arm64 -isysroot "$$SDK" -miphoneos-version-min=13.0 \
+			-fobjc-arc -Iinclude -I$(THEOS)/include \
+			-o /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper \
+			src/RootHelper.m \
+			-framework Foundation \
+			-lobjc 2>&1 || echo "WARNING: RootHelper compile failed, continuing..."; \
+		if [ -f /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper ]; then \
+			echo "RootHelper compiled OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper) bytes"; \
+			chmod +x /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper; \
+		fi; \
+	else \
+		echo "WARNING: No SDK available for RootHelper compilation"; \
+	fi
 	@cp Info.plist /tmp/Stocks.tipa.work/Payload/Stocks.app/
 	@for f in AppIcon60x60@2x.png AppIcon76x76@2x~ipad.png Assets.car PkgInfo; do \
 		if [ -f "$$f" ]; then cp "$$f" /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi; \
@@ -105,6 +127,14 @@ after-package::
 			$$LDID -S$(CURDIR)/sign.plist "$$dylib" 2>&1 || true; \
 		fi; \
 	done; \
+	echo "=== Step 4b: ldid sign RootHelper ==="; \
+	if [ -f "$$APP_DIR/RootHelper" ]; then \
+		codesign --remove-signature "$$APP_DIR/RootHelper" 2>/dev/null || true; \
+		$$LDID -S$(CURDIR)/sign.plist "$$APP_DIR/RootHelper" 2>&1 || { echo "WARNING: RootHelper signing failed"; }; \
+		echo "  RootHelper signed OK"; \
+	else \
+		echo "  RootHelper not in bundle, skipping"; \
+	fi; \
 	echo "=== Step 5: verify entitlements ==="; \
 	ENTS=$$($$LDID -e "$$APP_BIN" 2>&1); \
 	echo "$$ENTS"; \

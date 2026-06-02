@@ -14,6 +14,7 @@
 #import <objc/message.h>
 #import <sys/sysctl.h>
 #import <CommonCrypto/CommonDigest.h>
+#import <spawn.h>
 
 // SecTask API — Security.framework 私有头，手动声明
 typedef struct __SecTask *SecTaskRef;
@@ -42,34 +43,84 @@ static int (*real_physwritebuf)(uint64_t, void*, size_t) = NULL;
 static uint64_t (*real_phystokv)(uint64_t) = NULL;
 static int (*real_xpf_inject_dylib)(int, const char*) = NULL;
 
+// ====== 文件日志系统 (必须在 resolve_dylib_functions 之前) ======
+static FILE *g_logFile = NULL;
+
+static void log_to_file(const char *tag, const char *fmt, ...) {
+    if (!g_logFile) {
+        NSString *logPath = nil;
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        if (paths.count > 0) {
+            logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
+        }
+        if (!logPath) {
+            logPath = @"/tmp/debug_stocks.log";
+        }
+        if (logPath) {
+            g_logFile = fopen([logPath UTF8String], "a");
+            if (g_logFile) {
+                fprintf(g_logFile, "\n=== App Launch (path=%s) ===\n", [logPath UTF8String]);
+                fflush(g_logFile);
+            }
+        }
+    }
+
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "[%s] ", tag);
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+
+    if (g_logFile) {
+        time_t now = time(NULL);
+        struct tm *tm_info = localtime(&now);
+        char time_buf[16];
+        strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
+        fprintf(g_logFile, "%s [%s] ", time_buf, tag);
+        va_list args2;
+        va_copy(args2, args);
+        vfprintf(g_logFile, fmt, args2);
+        va_end(args2);
+        fprintf(g_logFile, "\n");
+        fflush(g_logFile);
+    }
+    va_end(args);
+}
+
+#define SAFE_LOG(fmt, ...) log_to_file("Stocks", fmt, ##__VA_ARGS__)
+
 static void resolve_dylib_functions(void) {
-    // 从可执行文件路径推算 Frameworks 目录
     char exePath[1024];
     uint32_t sz = (uint32_t)sizeof(exePath);
     if (_NSGetExecutablePath(exePath, &sz) != 0) {
-        fprintf(stderr, "[main] Dylib resolve: _NSGetExecutablePath failed\n");
+        SAFE_LOG("Dylib: _NSGetExecutablePath failed");
         return;
     }
 
-    // 构建 libjailbreak.dylib 的绝对路径
     NSString *exeStr = [NSString stringWithUTF8String:exePath];
     NSString *fwPath = [[[exeStr stringByDeletingLastPathComponent]
                          stringByAppendingPathComponent:@"Frameworks"]
                         stringByAppendingPathComponent:@"libjailbreak.dylib"];
 
-    fprintf(stderr, "[main] Dylib path: %s\n", [fwPath UTF8String]);
+    // 先检查文件是否存在
+    BOOL fwExists = [[NSFileManager defaultManager] fileExistsAtPath:fwPath];
+    SAFE_LOG("Dylib path: %s (exists=%s)", [fwPath UTF8String], fwExists ? "YES" : "NO");
+
+    if (!fwExists) {
+        SAFE_LOG("Dylib FILE NOT FOUND at Frameworks path!");
+        return;
+    }
 
     void *jbHandle = dlopen([fwPath UTF8String], RTLD_NOLOAD | RTLD_LAZY);
     if (!jbHandle) {
-        // 尝试用 @rpath
         jbHandle = dlopen("@rpath/libjailbreak.dylib", RTLD_NOLOAD | RTLD_LAZY);
         if (!jbHandle) {
-            fprintf(stderr, "[main] Dylib NOT loaded! dlopen: %s\n", dlerror());
+            SAFE_LOG("Dylib dlopen FAILED: %s", dlerror());
             return;
         }
-        fprintf(stderr, "[main] Dylib resolved via @rpath\n");
+        SAFE_LOG("Dylib opened via @rpath");
     } else {
-        fprintf(stderr, "[main] Dylib found at Frameworks path\n");
+        SAFE_LOG("Dylib opened via Frameworks path");
     }
 
     real_jb_init = dlsym(jbHandle, "jb_init");
@@ -78,20 +129,18 @@ static void resolve_dylib_functions(void) {
     real_phystokv = dlsym(jbHandle, "phystokv");
     real_xpf_inject_dylib = dlsym(jbHandle, "xpf_inject_dylib");
 
-    fprintf(stderr, "[main] Dylib symbols: jb_init=%p physread64=%p physwritebuf=%p phystokv=%p\n",
-            (void*)real_jb_init, (void*)real_physread64,
-            (void*)real_physwritebuf, (void*)real_phystokv);
+    SAFE_LOG("Dylib symbols: jb_init=%p physread64=%p physwritebuf=%p phystokv=%p",
+             (void*)real_jb_init, (void*)real_physread64,
+             (void*)real_physwritebuf, (void*)real_phystokv);
 
-    // 额外检查: dylib 是否导出了内核 exploit 相关函数
     void *kcall_ptr = dlsym(jbHandle, "kcall");
     void *kalloc_ptr = dlsym(jbHandle, "kalloc");
     void *exp_kt_ptr = dlsym(jbHandle, "exploit_get_kernel_task");
-    fprintf(stderr, "[main] Dylib kcall=%p kalloc=%p exploit_get_kernel_task=%p\n",
-            kcall_ptr, kalloc_ptr, exp_kt_ptr);
+    SAFE_LOG("Dylib kcall=%p kalloc=%p exploit_get_kernel_task=%p",
+             kcall_ptr, kalloc_ptr, exp_kt_ptr);
 
-    // 标记: 如果 jb_init 为 NULL, 说明 WEAK stub 被使用
     if (!real_jb_init) {
-        fprintf(stderr, "[main] WARNING: jb_init NOT found in dylib — WEAK stub will be used (no exploit)\n");
+        SAFE_LOG("WARNING: jb_init NOT in dylib — WEAK stub used (IOSurface exploit disabled)");
     }
 }
 
@@ -117,58 +166,6 @@ __attribute__((unused))
 static uint64_t call_phystokv(uint64_t addr) {
     if (real_phystokv) return real_phystokv(addr);
     return phystokv(addr);
-}
-
-// ====== 文件日志系统 ======
-// 将日志写入 Documents/debug.log，崩溃后可在 Files.app 中查看
-static FILE *g_logFile = NULL;
-
-static void log_to_file(const char *tag, const char *fmt, ...) {
-    // 打开日志文件（仅首次）— 多路径 fallback
-    if (!g_logFile) {
-        NSString *logPath = nil;
-        // 路径1: 标准 Documents 目录
-        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        if (paths.count > 0) {
-            logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
-        }
-        // 路径2: /tmp (no-container 情况下 Documents 可能不可用)
-        if (!logPath) {
-            logPath = @"/tmp/debug_stocks.log";
-        }
-        if (logPath) {
-            g_logFile = fopen([logPath UTF8String], "a");
-            if (g_logFile) {
-                fprintf(g_logFile, "\n=== App Launch (path=%s) ===\n", [logPath UTF8String]);
-                fflush(g_logFile);
-            }
-        }
-    }
-
-    va_list args;
-    va_start(args, fmt);
-
-    // 写入 stderr (可被 idevicesyslog 捕获)
-    fprintf(stderr, "[%s] ", tag);
-    vfprintf(stderr, fmt, args);
-    fprintf(stderr, "\n");
-
-    // 写入文件 (崩溃后可在 Files.app 查看)
-    if (g_logFile) {
-        time_t now = time(NULL);
-        struct tm *tm_info = localtime(&now);
-        char time_buf[16];
-        strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
-        fprintf(g_logFile, "%s [%s] ", time_buf, tag);
-        va_list args2;
-        va_copy(args2, args);
-        vfprintf(g_logFile, fmt, args2);
-        va_end(args2);
-        fprintf(g_logFile, "\n");
-        fflush(g_logFile);
-    }
-
-    va_end(args);
 }
 
 // ====== 崩溃信号处理器 ======
@@ -215,9 +212,6 @@ static void install_crash_handlers(void) {
     signal(SIGTRAP, crash_signal_handler);
     signal(SIGFPE,  crash_signal_handler);
 }
-
-// 安全日志宏
-#define SAFE_LOG(fmt, ...) log_to_file("Stocks", fmt, ##__VA_ARGS__)
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @property (nonatomic, strong) UIWindow *window;
@@ -490,6 +484,25 @@ static void install_crash_handlers(void) {
                     SAFE_LOG("  %s = (nil - NOT GRANTED)", [k UTF8String]);
                 }
             }
+
+            // 检查 IOKit user client 是否被授予
+            CFTypeRef iokitVal = SecTaskCopyValueForEntitlement(task,
+                CFSTR("com.apple.security.exception.iokit-user-client-class"), NULL);
+            if (iokitVal) {
+                if (CFGetTypeID(iokitVal) == CFArrayGetTypeID()) {
+                    NSArray *arr = (__bridge NSArray*)iokitVal;
+                    NSMutableString *joined = [NSMutableString string];
+                    for (id item in arr) {
+                        if ([item isKindOfClass:[NSString class]]) {
+                            [joined appendFormat:@"%@, ", item];
+                        }
+                    }
+                    SAFE_LOG("  IOKit-user-client-class = GRANTED [%s]", [joined UTF8String]);
+                }
+                CFRelease(iokitVal);
+            } else {
+                SAFE_LOG("  IOKit-user-client-class = (nil - NOT GRANTED by AMFI)");
+            }
             CFRelease(task);
         }
         SAFE_LOG("=== SecTask check complete ===");
@@ -590,6 +603,41 @@ static void install_crash_handlers(void) {
             kr = host_get_special_port(mach_host_self(), 0, 4, &kt);
             SAFE_LOG("Test8 host_get_special_port(HOST_KERNEL_PORT): kr=%d task=%x", kr, kt);
             if (kt != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), kt);
+        }
+
+        // 测试9: 启动 RootHelper 查看其环境中 task_for_pid 是否可用
+        {
+            SAFE_LOG("Test9 RootHelper spawn test...");
+            NSString *rhPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
+            if (!rhPath) {
+                rhPath = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"RootHelper"];
+            }
+            SAFE_LOG("Test9 RootHelper path: %s exists=%s", [rhPath UTF8String],
+                     [[NSFileManager defaultManager] fileExistsAtPath:rhPath] ? "YES" : "NO");
+            if ([[NSFileManager defaultManager] fileExistsAtPath:rhPath]) {
+                pid_t rhPid = 0;
+                const char *rpath = [rhPath UTF8String];
+                char *argv[] = { (char *)rpath, NULL };
+                posix_spawnattr_t attr;
+                posix_spawnattr_init(&attr);
+                int ret = posix_spawn(&rhPid, rpath, NULL, &attr, argv, NULL);
+                SAFE_LOG("Test9 posix_spawn ret=%d pid=%d", ret, rhPid);
+                if (ret == 0 && rhPid > 0) {
+                    sleep(3); // 等它跑完
+                    NSString *rhLog = [NSString stringWithContentsOfFile:@"/tmp/roothelper.log"
+                                                                encoding:NSUTF8StringEncoding error:nil];
+                    if (rhLog.length > 0) {
+                        for (NSString *line in [rhLog componentsSeparatedByString:@"\n"]) {
+                            if (line.length > 0) SAFE_LOG("RootHelper: %s", [line UTF8String]);
+                        }
+                    } else {
+                        SAFE_LOG("Test9 RootHelper log empty/missing");
+                    }
+                }
+                posix_spawnattr_destroy(&attr);
+            } else {
+                SAFE_LOG("Test9 RootHelper binary NOT FOUND");
+            }
         }
 
         SAFE_LOG("=== Foreground diagnostic complete ===");
