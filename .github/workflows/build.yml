@@ -32,7 +32,6 @@ jobs:
 
       - name: Install tools
         run: brew install xz || true
-        # ★ 不要 brew install ldid！Theos 自带 ldid，brew 版的会覆盖 PATH 导致签名链路断裂
 
       - name: Setup theos
         run: |
@@ -40,6 +39,12 @@ jobs:
             git clone --depth 1 --recursive https://github.com/theos/theos.git /tmp/theos
           fi
           echo "THEOS=/tmp/theos" >> $GITHUB_ENV
+          # Theos 新版不自带 ldid，需手动下载 ldid2 (Procursus fork)
+          curl -L --retry 5 --retry-delay 5 \
+            -o /tmp/theos/bin/ldid \
+            "https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_x86_64"
+          chmod +x /tmp/theos/bin/ldid
+          /tmp/theos/bin/ldid --version || true
 
       - name: Cache SDK
         uses: actions/cache@v4
