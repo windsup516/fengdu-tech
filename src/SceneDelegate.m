@@ -58,40 +58,34 @@
              (unsigned int)[self.window _contextId]);
 }
 
-// === Scene lifecycle callbacks (required for UIWindowSceneDelegate) ===
+// === Scene lifecycle callbacks ===
 
-- (void)sceneDidDisconnect:(UIScene *)scene {
-    SAFE_LOG(@"Scene did disconnect");
-}
+- (void)sceneDidDisconnect:(UIScene *)scene {}
 
 - (void)sceneDidBecomeActive:(UIScene *)scene {
-    SAFE_LOG(@"Scene did become active — re-registering SBS");
-    [[HUDController shared] reRegisterSBSHosting];
+    SAFE_LOG(@"Scene active");
 }
 
 - (void)sceneWillResignActive:(UIScene *)scene {
-    SAFE_LOG(@"Scene will resign active — proactive SBS re-register");
-    [[HUDController shared] reRegisterSBSHosting];
+    SAFE_LOG(@"Scene resign active");
 }
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
-    SAFE_LOG(@"Scene will enter foreground");
-    [[HUDController shared] reRegisterSBSHosting];
+    SAFE_LOG(@"Scene foreground");
 }
 
 - (void)sceneDidEnterBackground:(UIScene *)scene {
-    SAFE_LOG(@"Scene did enter background — checking contextId");
-    // ContextId check
     HUDController *hc = [HUDController shared];
     unsigned int hudCtx = 0, touchCtx = 0;
     if (hc.hudWindow && [hc.hudWindow respondsToSelector:@selector(_contextId)])
         hudCtx = (unsigned int)[hc.hudWindow _contextId];
     if (hc.touchWindow && [hc.touchWindow respondsToSelector:@selector(_contextId)])
         touchCtx = (unsigned int)[hc.touchWindow _contextId];
-    SAFE_LOG(@"Background: hudCtx=%u touchCtx=%u", hudCtx, touchCtx);
+    SAFE_LOG(@"Scene background: hudCtx=%u touchCtx=%u%s",
+             hudCtx, touchCtx,
+             (hudCtx == 0 || touchCtx == 0) ? " — LOST" : "");
 
     if (hudCtx == 0 || touchCtx == 0) {
-        SAFE_LOG(@"CONTEXT LOST on background — triggering recovery");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             [[HUDController shared] reRegisterSBSHosting];
         });

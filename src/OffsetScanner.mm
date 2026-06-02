@@ -490,9 +490,9 @@ static uint64_t scan_gworld_in_data(mach_port_t task, uint64_t text_start, uint6
                 int score = actors_count;
                 uint64_t gworld_addr = addr + i * 8;
 
-                if (candidates_checked <= 10 || score > best_score) {
-                    HOOKS_LOG(@"GWorld candidate #%d: addr=0x%llx -> UWorld=0x%llx (vtable=0x%llx plevel=0x%llx actors=%d)",
-                              candidates_checked, gworld_addr, candidate, vtable, plevel, actors_count);
+                if (candidates_checked <= 5 || score > best_score) {
+                    HOOKS_LOG(@"GWorld candidate #%d: addr=0x%llx actors=%d",
+                              candidates_checked, gworld_addr, actors_count);
                 }
 
                 if (score > best_score) {
@@ -694,11 +694,11 @@ static uint64_t scan_gworld_text_chunked(mach_port_t task, uint64_t text_start, 
             if (refs > best_refs) {
                 best_refs = refs;
                 best_addr = target;
-                if (refs >= 3) {
-                    HOOKS_LOG(@"GWorld TEXT hit: *0x%llx=0x%llx refs=%d (pc=0x%llx %s%s%s)",
-                              target, pointed, refs, pc,
-                              from_adrp ? "ADRP" : "", from_movz ? "MOVZ" : "",
-                              in_const ? " via GOT" : "");
+                if (refs >= 5) {
+                    HOOKS_LOG(@"GWorld TEXT hit: *0x%llx=0x%llx refs=%d via %s%s",
+                              target, pointed, refs,
+                              in_const ? "GOT" : "DATA",
+                              from_movz ? "+MOVZ" : "");
                 }
             }
         }

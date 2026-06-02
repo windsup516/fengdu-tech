@@ -24,7 +24,7 @@ extern int proc_name(int pid, void *buffer, uint32_t buffersize);
 static FILE *g_log = NULL;
 
 static void helper_log(const char *fmt, ...) {
-    if (!g_log) g_log = fopen("/tmp/roothelper.log", "a");
+    if (!g_log) g_log = fopen("/tmp/roothelper.log", "w");
     va_list args;
     va_start(args, fmt);
     if (g_log) {

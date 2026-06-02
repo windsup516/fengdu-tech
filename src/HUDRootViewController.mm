@@ -55,7 +55,6 @@ void hudTriggerSBSRecovery(void);
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    HUD_LOG(@"viewDidLoad: starting Metal+ImGui init...");
     self.view.backgroundColor = [UIColor clearColor];
 
     UIScreen *screen = [UIScreen mainScreen];
@@ -65,29 +64,22 @@ void hudTriggerSBSRecovery(void);
     g_screenScale = (float)scale;
     g_screenWidth = (float)bounds.size.width;
     g_screenHeight = (float)bounds.size.height;
-    HUD_LOG(@"Screen: %.0fx%.0f scale=%.1f", g_screenWidth, g_screenHeight, g_screenScale);
 
-    // ===== 步骤0: 创建 ImGui 上下文 (必须在任何 ImGui 调用之前, 且只创建一次) =====
     if (!g_imGuiInitialized) {
         if (!ImGui::GetCurrentContext()) {
             ImGui::CreateContext();
-            ImGui::GetIO().IniFilename = NULL; // 禁用 ini 文件, 避免文件系统检测
-            HUD_LOG(@"ImGui context created");
+            ImGui::GetIO().IniFilename = NULL;
         }
     }
 
-    // ===== 创建 UITextField 作为 CAMetalLayer 容器 (反检测关键) =====
     gMetalContainer = [[UITextField alloc] initWithFrame:bounds];
     gMetalContainer.backgroundColor = [UIColor clearColor];
     gMetalContainer.secureTextEntry = YES;
     gMetalContainer.userInteractionEnabled = NO;
 
     UIView *fieldEditor = gMetalContainer.subviews.firstObject;
-    if (fieldEditor) {
-        fieldEditor.userInteractionEnabled = NO;
-    }
+    if (fieldEditor) fieldEditor.userInteractionEnabled = NO;
 
-    // ===== 创建 CAMetalLayer =====
     gMetalLayer = [CAMetalLayer layer];
     gMetalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     gMetalLayer.framebufferOnly = YES;
@@ -96,60 +88,39 @@ void hudTriggerSBSRecovery(void);
     gMetalLayer.presentsWithTransaction = NO;
     gMetalLayer.frame = bounds;
 
-    if (fieldEditor) {
-        [fieldEditor.layer addSublayer:gMetalLayer];
-    } else {
-        [gMetalContainer.layer addSublayer:gMetalLayer];
-    }
+    [(fieldEditor ?: gMetalContainer).layer addSublayer:gMetalLayer];
 
-    // ===== 创建 Metal 设备 (仅首次) =====
     if (!g_imGuiInitialized) {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         if (!device) {
-            HUD_LOG(@"FATAL: Metal not available on this device");
+            HUD_LOG(@"FATAL: Metal not available");
             return;
         }
         gMetalLayer.device = device;
-        gMetalLayer.drawableSize = CGSizeMake(bounds.size.width * scale,
-                                               bounds.size.height * scale);
-
-        // ===== 创建命令队列 =====
+        gMetalLayer.drawableSize = CGSizeMake(bounds.size.width * scale, bounds.size.height * scale);
         gCmdQueue = [device newCommandQueue];
 
-        // ===== 初始化 Metal 渲染器 =====
-        self.renderer = [[MetalRenderer alloc] initWithDevice:device
-                                                        layer:gMetalLayer
-                                                 commandQueue:gCmdQueue];
-
-        // ===== 初始化 ImGui 配置 (context 已创建, GetIO 安全) =====
+        self.renderer = [[MetalRenderer alloc] initWithDevice:device layer:gMetalLayer commandQueue:gCmdQueue];
         self.imgui = [[ImGuiAdapter alloc] init];
         [self.imgui loadFonts];
         [self.imgui setupStyle];
 
-        // ===== 初始化 ImGui Metal 后端 + 显式创建字体纹理 =====
         ImGui_ImplMetal_Init(device);
         ImGui_ImplMetal_CreateDeviceObjects(device);
-        HUD_LOG(@"ImGui Metal backend initialized (device=%s)", [[device name] UTF8String]);
     }
 
-    // ===== 启动 DisplayLink 60fps 渲染循环 =====
     if (!self.displayLink) {
-        self.displayLink = [CADisplayLink displayLinkWithTarget:self
-                                                       selector:@selector(ChangeUI)];
-
-        if (@available(iOS 15.0, *)) {
+        self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(ChangeUI)];
+        if (@available(iOS 15.0, *))
             self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 60, 60);
-        } else {
+        else
             self.displayLink.preferredFramesPerSecond = 60;
-        }
-
-        [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop]
-                               forMode:NSRunLoopCommonModes];
+        [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     }
 
     self.rendering = YES;
     g_imGuiInitialized = YES;
-    HUD_LOG(@"Metal+ImGui ready, rendering=%d displayLink=%@", self.rendering, self.displayLink ? @"YES" : @"NIL");
+    HUD_LOG(@"Metal+ImGui ready: %.0fx%.0f@%.1fx", g_screenWidth, g_screenHeight, g_screenScale);
 }
 
 - (void)ChangeUI {
@@ -158,57 +129,49 @@ void hudTriggerSBSRecovery(void);
     if (!ImGui::GetCurrentContext()) return;
 
     static int frameCount = 0;
-    if (++frameCount <= 10 || frameCount % 300 == 0) {
-        HUD_LOG(@"ChangeUI rendering frame #%d", frameCount);
-    }
+    frameCount++;
 
-    // 诊断: 前 60 帧 (1秒) 输出每个细节
-    // 之后每 180 帧 (3秒) 输出一次摘要
-    static int diagCount = 0;
-    diagCount++;
-    if (diagCount <= 60 || diagCount % 180 == 0) {
-        HUD_LOG(@"[DIAG f#%d] screen=%.0fx%.0f scale=%.1f", diagCount,
-                g_screenWidth, g_screenHeight, g_screenScale);
-        HUD_LOG(@"[DIAG f#%d] viewBounds=%@ viewFrame=%@ alpha=%.2f", diagCount,
-                NSStringFromCGRect(self.view.bounds),
-                NSStringFromCGRect(self.view.frame),
-                self.view.alpha);
-        HUD_LOG(@"[DIAG f#%d] metalLayer frame=%@ opaque=%d drawableSize=%@", diagCount,
-                NSStringFromCGRect(gMetalLayer.frame),
-                gMetalLayer.opaque,
-                NSStringFromCGSize(gMetalLayer.drawableSize));
-        HUD_LOG(@"[DIAG f#%d] hudCtx=%u touchCtx=%u", diagCount,
-                hudWindowContextId(), touchWindowContextId());
-    }
-
-    // contextId 恢复: 每帧检查, 连续 N 帧 ctx=0 则触发窗口重建
+    // contextId 状态变化检测
     {
+        static unsigned int lastHudCtx = 0;
         static int deadFrames = 0;
+        static BOOL deadReported = NO;
         unsigned int hudCtx = hudWindowContextId();
+
         if (hudCtx == 0) {
             deadFrames++;
-            if (deadFrames == 30) {
-                HUD_LOG(@"CONTEXT DEAD for %d frames — triggering recovery", deadFrames);
+            if (deadFrames == 1 && lastHudCtx != 0) {
+                HUD_LOG(@"HUD context LOST: %u -> 0", lastHudCtx);
+                deadReported = NO;
+            }
+            if (deadFrames == 30 && !deadReported) {
+                HUD_LOG(@"HUD context still dead after 30 frames — triggering recovery");
+                deadReported = YES;
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [self recreateMetalLayer];
                     hudTriggerSBSRecovery();
                 });
             }
         } else {
-            if (deadFrames >= 30) {
-                HUD_LOG(@"CONTEXT RECOVERED after %d dead frames", deadFrames);
+            if (deadFrames > 0) {
+                HUD_LOG(@"HUD context RECOVERED: 0 -> %u after %d dead frames", hudCtx, deadFrames);
+                deadReported = NO;
             }
             deadFrames = 0;
+            lastHudCtx = hudCtx;
+        }
+
+        // 每300帧心跳
+        if (frameCount % 300 == 0) {
+            unsigned int touchCtx = touchWindowContextId();
+            HUD_LOG(@"heartbeat f#%d: hudCtx=%u touchCtx=%u", frameCount, hudCtx, touchCtx);
         }
     }
 
     self.animationTime = CACurrentMediaTime();
 
     id<CAMetalDrawable> drawable = [gMetalLayer nextDrawable];
-    if (!drawable) {
-        if (diagCount <= 10) HUD_LOG(@"[DIAG f#%d] nextDrawable returned nil!", diagCount);
-        return;
-    }
+    if (!drawable) return;
 
     id<MTLCommandBuffer> cmdBuffer = [gCmdQueue commandBuffer];
     if (!cmdBuffer) return;
@@ -297,17 +260,10 @@ void hudTriggerSBSRecovery(void);
 // CAMetalLayer 更换不会改变 contextId (contextId 属于 UIWindow 的 CAContext)
 // 必须通过 makeKeyAndVisible 让 window server 分配新的 CAContext
 - (void)recreateMetalLayer {
-    HUD_LOG(@"recreateMetalLayer: forcing window CAContext refresh...");
-
-    // 获取 HUDController 的 hudWindow
     HUDController *hc = [HUDController shared];
     UIWindow *hudWin = hc.hudWindow;
-    if (!hudWin) {
-        HUD_LOG(@"recreateMetalLayer: no hudWindow, aborting");
-        return;
-    }
+    if (!hudWin) return;
 
-    // 重新创建 CAMetalLayer (确保 layer 本身也是新的)
     id<MTLDevice> device = gMetalLayer.device;
     if (device) {
         [gMetalLayer removeFromSuperlayer];
@@ -327,18 +283,13 @@ void hudTriggerSBSRecovery(void);
         [container.layer addSublayer:newLayer];
         gMetalLayer = newLayer;
 
-        if (self.renderer) {
-            [self.renderer updateLayer:newLayer];
-        }
-        HUD_LOG(@"recreateMetalLayer: CAMetalLayer replaced");
+        if (self.renderer) [self.renderer updateLayer:newLayer];
     }
 
-    // 强制 UIWindow 重新连接 render server 获取新 contextId
     hudWin.hidden = NO;
     [hudWin makeKeyAndVisible];
     hudWin.windowLevel = 10000010.0;
-    HUD_LOG(@"recreateMetalLayer: makeKeyAndVisible called, new ctx=%u",
-            hudWindowContextId());
+    HUD_LOG(@"recreateMetalLayer: new ctx=%u", hudWindowContextId());
 }
 
 @end

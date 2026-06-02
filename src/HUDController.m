@@ -94,68 +94,47 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
     if (self.windowsCreated) return;
     self.windowsCreated = YES;
 
-    NSLog(@"[HUD] createWindowsOnScene called, scene=%@", scene);
-
-    // 确保在主线程 + 窗口 scene 已就绪
     if (!scene) {
-        HUD_LOG(@"createWindowsOnScene: scene is nil, aborting");
-        NSLog(@"[HUD] FATAL: scene is nil, trying fallback");
+        HUD_LOG(@"createWindowsOnScene: scene nil, trying fallback");
         scene = [UIApplication sharedApplication].connectedScenes.anyObject;
         if (!scene) {
-            NSLog(@"[HUD] FATAL: no connected scenes at all");
+            HUD_LOG(@"createWindowsOnScene FATAL: no connected scenes");
             self.windowsCreated = NO;
             return;
         }
-        NSLog(@"[HUD] fallback scene found: %@", scene);
     }
 
     @try {
-        // 步骤1: 创建 HUD 视图控制器
         self.rootVC = [[HUDRootViewController alloc] init];
         self.touchVC = [[TouchViewController alloc] init];
-
-        // 步骤2: 获取屏幕尺寸
         UIScreen *screen = [UIScreen mainScreen];
         CGRect screenBounds = screen.bounds;
 
-        // 步骤3: 创建 HUD 窗口 (level 10000010)
         self.hudWindow = [[HUDMainWindow alloc] initWithFrame:screenBounds];
         self.hudWindow.windowScene = scene;
         self.hudWindow.rootViewController = self.rootVC;
         self.hudWindow.hidden = NO;
         [self.hudWindow makeKeyAndVisible];
-        self.hudWindow.windowLevel = 10000010.0;  // set AFTER makeKeyAndVisible (it resets level)
+        self.hudWindow.windowLevel = 10000010.0;
 
-        // 步骤4: 创建触摸窗口 (level 10000011)
         self.touchWindow = [[TouchMainWindow alloc] initWithFrame:screenBounds];
         self.touchWindow.windowScene = scene;
         self.touchWindow.hudController = self.rootVC;
         self.touchWindow.rootViewController = self.touchVC;
         self.touchWindow.hidden = NO;
         [self.touchWindow makeKeyAndVisible];
-        self.touchWindow.windowLevel = 10000011.0;  // set AFTER makeKeyAndVisible
+        self.touchWindow.windowLevel = 10000011.0;
 
         gTouchWindow = self.touchWindow;
 
-        // 步骤5: SBS 托管 (可能失败，非致命)
-        @try {
-            [self setupHostingController];
-        } @catch (NSException *e) {
-            HUD_LOG(@"Hosting controller setup failed: %@", e);
-        }
+        @try { [self setupHostingController]; }
+        @catch (NSException *e) { HUD_LOG(@"Hosting setup failed: %@", e); }
 
-        // 步骤6: 同步方向
         [self.rootVC syncCurrentOrientation];
-
-        // 步骤7: 后台保活 (SBS 不可用时的备选方案)
         [self setupBackgroundKeepAlive];
 
-        // 步骤8: HID 回调 (可能失败，非致命)
-        @try {
-            [self registerHIDEventCallback];
-        } @catch (NSException *e) {
-            HUD_LOG(@"HID callback registration failed: %@", e);
-        }
+        @try { [self registerHIDEventCallback]; }
+        @catch (NSException *e) { HUD_LOG(@"HID callback failed: %@", e); }
 
         HUD_LOG(@"Windows created: hudLevel=10000010 touchLevel=10000011");
     } @catch (NSException *e) {
@@ -167,91 +146,52 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
 - (void)setupHostingController {
     Class hostingClass = NSClassFromString(@"SBSAccessibilityWindowHostingController");
 
-    HUD_LOG(@"SBS class lookup: %@", hostingClass ? NSStringFromClass(hostingClass) : @"NIL");
-
     if (hostingClass) {
         self.hostingController = [[hostingClass alloc] init];
 
-        if (self.hudWindow) {
-            // 获取窗口诊断信息
-            unsigned int hudCtx = 0;
-            if ([self.hudWindow respondsToSelector:@selector(_contextId)]) {
-                hudCtx = (unsigned int)[self.hudWindow _contextId];
-            }
-            HUD_LOG(@"HUD window ctx=%u level=%.0f", hudCtx, self.hudWindow.windowLevel);
+        if (self.hudWindow)
             attachWindowToHostingController(self.hudWindow, self.hostingController);
-        }
-        if (self.touchWindow) {
-            unsigned int touchCtx = 0;
-            if ([self.touchWindow respondsToSelector:@selector(_contextId)]) {
-                touchCtx = (unsigned int)[self.touchWindow _contextId];
-            }
-            HUD_LOG(@"Touch window ctx=%u level=%.0f", touchCtx, self.touchWindow.windowLevel);
+        if (self.touchWindow)
             attachWindowToHostingController(self.touchWindow, self.hostingController);
-        }
 
-        HUD_LOG(@"SBS hosting OK: %@", NSStringFromClass(hostingClass));
+        HUD_LOG(@"SBS hosting initialized");
     } else {
-        HUD_LOG(@"SBS hosting UNAVAILABLE on this iOS — will use background keep-alive fallback");
+        HUD_LOG(@"SBS hosting UNAVAILABLE — fallback mode");
     }
 }
 
 - (void)setupBackgroundKeepAlive {
     __weak typeof(self) weakSelf = self;
 
-    // 退后台前: 最后一次机会告诉 SBS 保留我们的窗口
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillResignActiveNotification
-                                                       object:nil
-                                                        queue:[NSOperationQueue mainQueue]
+                                                       object:nil queue:[NSOperationQueue mainQueue]
                                                    usingBlock:^(NSNotification *note) {
-        HUD_LOG(@"App will resign active — syncing orientation + proactive SBS re-register");
         [weakSelf.rootVC syncCurrentOrientation];
-        HUD_LOG(@"Screen after sync: %.0fx%.0f scale=%.1f",
-                [HUDRootViewController screenWidth],
-                [HUDRootViewController screenHeight],
-                [HUDRootViewController screenScale]);
-
-        // 记录当前 contextId
-        unsigned int hudCtx = 0, touchCtx = 0;
-        if (weakSelf.hudWindow && [weakSelf.hudWindow respondsToSelector:@selector(_contextId)])
-            hudCtx = (unsigned int)[weakSelf.hudWindow _contextId];
-        if (weakSelf.touchWindow && [weakSelf.touchWindow respondsToSelector:@selector(_contextId)])
-            touchCtx = (unsigned int)[weakSelf.touchWindow _contextId];
-        HUD_LOG(@"Pre-resign contextId: hud=%u touch=%u", hudCtx, touchCtx);
-
-        // 主动重注册 SBS (contextId 还有效, SpringBoard 可以建立托管)
-        if (hudCtx != 0 && weakSelf.hostingController) {
-            attachWindowToHostingController(weakSelf.hudWindow, weakSelf.hostingController);
+        if (weakSelf.hostingController) {
+            if (weakSelf.hudWindow) attachWindowToHostingController(weakSelf.hudWindow, weakSelf.hostingController);
+            if (weakSelf.touchWindow) attachWindowToHostingController(weakSelf.touchWindow, weakSelf.hostingController);
         }
-        if (touchCtx != 0 && weakSelf.hostingController) {
-            attachWindowToHostingController(weakSelf.touchWindow, weakSelf.hostingController);
-        }
-
         weakSelf.hudWindow.hidden = NO;
         weakSelf.touchWindow.hidden = NO;
         weakSelf.hudWindow.windowLevel = 10000010.0;
         weakSelf.touchWindow.windowLevel = 10000011.0;
     }];
 
-    // 已进入后台: 检查 contextId 是否还活着
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification
-                                                       object:nil
-                                                        queue:[NSOperationQueue mainQueue]
+                                                       object:nil queue:[NSOperationQueue mainQueue]
                                                    usingBlock:^(NSNotification *note) {
         unsigned int hudCtx = 0, touchCtx = 0;
         if (weakSelf.hudWindow && [weakSelf.hudWindow respondsToSelector:@selector(_contextId)])
             hudCtx = (unsigned int)[weakSelf.hudWindow _contextId];
         if (weakSelf.touchWindow && [weakSelf.touchWindow respondsToSelector:@selector(_contextId)])
             touchCtx = (unsigned int)[weakSelf.touchWindow _contextId];
-        HUD_LOG(@"DidEnterBackground: hudCtx=%u touchCtx=%u — %s",
+        HUD_LOG(@"Entered background: hudCtx=%u touchCtx=%u — %s",
                 hudCtx, touchCtx,
-                (hudCtx == 0) ? "DEAD (render context lost)" : "alive (SBS holding)");
+                (hudCtx == 0) ? "DEAD" : "alive");
     }];
 
-    // 回到前台: 检查 contextId 恢复情况
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
-                                                       object:nil
-                                                        queue:[NSOperationQueue mainQueue]
+                                                       object:nil queue:[NSOperationQueue mainQueue]
                                                    usingBlock:^(NSNotification *note) {
         if (!weakSelf.showing) return;
         weakSelf.hudWindow.hidden = NO;
@@ -265,10 +205,10 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         if (weakSelf.touchWindow && [weakSelf.touchWindow respondsToSelector:@selector(_contextId)])
             touchCtx = (unsigned int)[weakSelf.touchWindow _contextId];
 
-        HUD_LOG(@"Become active: hudCtx=%u touchCtx=%u", hudCtx, touchCtx);
-        if (hudCtx != 0 && touchCtx != 0) {
+        if (hudCtx == 0 || touchCtx == 0)
+            HUD_LOG(@"Became active: hudCtx=%u touchCtx=%u — DEAD", hudCtx, touchCtx);
+        else
             [weakSelf reRegisterSBSHosting];
-        }
     }];
 }
 
@@ -297,14 +237,11 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
     }
 
     if (hudCtx == 0 || touchCtx == 0) {
-        // contextId 丢失 — 后台状态重建窗口拿不到新 context，不重建，改为定时重试
-        HUD_LOG(@"reRegisterSBS: contextId lost (hud=%u touch=%u) — scheduling retry, NOT recreating", hudCtx, touchCtx);
+        HUD_LOG(@"SBS contextId lost (hud=%u touch=%u) — starting retry loop", hudCtx, touchCtx);
 
-        // 取消之前的重试定时器
         [self.sbsRetryTimer invalidate];
         self.sbsRetryTimer = nil;
 
-        // 每 3 秒重试一次，最多 10 次 (30秒)
         __weak typeof(self) weakSelf = self;
         __block int retryCount = 0;
         self.sbsRetryTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *timer) {
@@ -315,10 +252,8 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
             if (weakSelf.touchWindow && [weakSelf.touchWindow respondsToSelector:@selector(_contextId)])
                 tc = (unsigned int)[weakSelf.touchWindow _contextId];
 
-            HUD_LOG(@"SBS retry #%d: hudCtx=%u touchCtx=%u", retryCount, hc, tc);
-
             if (hc != 0 && tc != 0) {
-                HUD_LOG(@"SBS contextId recovered after %d retries — registering", retryCount);
+                HUD_LOG(@"SBS contextId recovered after %d retries", retryCount);
                 [timer invalidate];
                 weakSelf.sbsRetryTimer = nil;
                 if (weakSelf.hudWindow) attachWindowToHostingController(weakSelf.hudWindow, weakSelf.hostingController);
@@ -327,7 +262,7 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
             }
 
             if (retryCount >= 10) {
-                HUD_LOG(@"SBS retry exhausted (%d attempts) — contextId never recovered", retryCount);
+                HUD_LOG(@"SBS recovery FAILED: %d retries exhausted, hudCtx=%u touchCtx=%u", retryCount, hc, tc);
                 [timer invalidate];
                 weakSelf.sbsRetryTimer = nil;
             }
@@ -335,20 +270,13 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         return;
     }
 
-    // contextId 有效 — 直接重注册
-    HUD_LOG(@"reRegisterSBS: contextId valid (hud=%u touch=%u), re-registering...", hudCtx, touchCtx);
-    if (self.hudWindow) {
+    if (self.hudWindow)
         attachWindowToHostingController(self.hudWindow, self.hostingController);
-    }
-    if (self.touchWindow) {
+    if (self.touchWindow)
         attachWindowToHostingController(self.touchWindow, self.hostingController);
-    }
 }
 
 - (void)show {
-    NSLog(@"[HUD] show called, windowsCreated=%d hudWindow=%@ touchWindow=%@",
-          self.windowsCreated, self.hudWindow, self.touchWindow);
-
     void (^showBlock)(void) = ^{
         self.hudWindow.hidden = NO;
         self.touchWindow.hidden = NO;
@@ -356,20 +284,14 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         self.touchWindow.windowLevel = 10000011.0;
         self.showing = YES;
         [self.rootVC prepareForEntryAnimation];
-        HUD_LOG(@"Windows now visible (hudLevel=%.0f touchLevel=%.0f)",
-                self.hudWindow.windowLevel, self.touchWindow.windowLevel);
-        NSLog(@"[HUD] Windows set visible: hudLevel=%.0f touchLevel=%.0f",
-              self.hudWindow.windowLevel, self.touchWindow.windowLevel);
+        HUD_LOG(@"HUD shown");
     };
 
     if ([NSThread isMainThread]) {
         showBlock();
     } else {
-        NSLog(@"[HUD] show called from background thread, dispatching to main");
         dispatch_async(dispatch_get_main_queue(), showBlock);
     }
-
-    HUD_LOG(@"Shown");
 }
 
 - (void)hide {
@@ -401,44 +323,44 @@ void attachWindowToHostingController(UIWindow *window, id hostingController) {
         if ([window respondsToSelector:@selector(_contextId)]) {
             contextId = (unsigned int)[window _contextId];
         }
-        HUD_LOG(@"SBS register: window=%@ ctx=%u level=%.0f", NSStringFromClass([window class]), contextId, window.windowLevel);
 
-        if (contextId == 0) {
-            HUD_LOG(@"SBS: skipping — contextId=0 (render context dead)");
-            return;
-        }
+        if (contextId == 0) return;
 
         double winLevel = window.windowLevel;
+        static unsigned int lastRegCtx = 0;
+        static double lastRegLevel = 0;
+        BOOL changed = (contextId != lastRegCtx || winLevel != lastRegLevel);
 
-        // 优先尝试 3-arg 版本: registerWindow:contextID:windowLevel:
-        // 传递 window 对象让 SBS 持有引用，防止后台时 render context 被回收
+        if (changed) {
+            HUD_LOG(@"SBS register: %@ ctx=%u level=%.0f",
+                    NSStringFromClass([window class]), contextId, winLevel);
+            lastRegCtx = contextId;
+            lastRegLevel = winLevel;
+        }
+
+        // Prefer 3-arg: registerWindow:contextID:windowLevel:
         SEL sel3 = NSSelectorFromString(@"registerWindow:contextID:windowLevel:");
         if ([hostingController respondsToSelector:sel3]) {
-            HUD_LOG(@"SBS: using registerWindow:contextID:windowLevel: (3-arg)");
-
             NSMethodSignature *sig = [NSMethodSignature signatureWithObjCTypes:"v@:@Id"];
             NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
             [inv setTarget:hostingController];
             [inv setSelector:sel3];
-            [inv setArgument:&window atIndex:2];      // UIWindow *window
-            [inv setArgument:&contextId atIndex:3];    // unsigned int contextID
-            [inv setArgument:&winLevel atIndex:4];     // double windowLevel
+            [inv setArgument:&window atIndex:2];
+            [inv setArgument:&contextId atIndex:3];
+            [inv setArgument:&winLevel atIndex:4];
             [inv invoke];
-
-            // 检查返回值 (BOOL)
-            BOOL result = NO;
-            if ([[inv methodSignature] methodReturnLength] > 0) {
-                [inv getReturnValue:&result];
+            if (changed) {
+                BOOL result = NO;
+                if ([[inv methodSignature] methodReturnLength] > 0)
+                    [inv getReturnValue:&result];
+                HUD_LOG(@"SBS 3-arg result=%d", result);
             }
-            HUD_LOG(@"SBS 3-arg result=%d ctx=%u level=%.0f", result, contextId, winLevel);
             return;
         }
 
-        // 降级: 2-arg 版本 registerWindowWithContextID:atLevel:
+        // Fallback: 2-arg registerWindowWithContextID:atLevel:
         SEL sel2 = NSSelectorFromString(@"registerWindowWithContextID:atLevel:");
         if ([hostingController respondsToSelector:sel2]) {
-            HUD_LOG(@"SBS: using registerWindowWithContextID:atLevel: (2-arg fallback)");
-
             NSMethodSignature *sig = [NSMethodSignature signatureWithObjCTypes:"v@:Id"];
             NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
             [inv setTarget:hostingController];
@@ -446,18 +368,18 @@ void attachWindowToHostingController(UIWindow *window, id hostingController) {
             [inv setArgument:&contextId atIndex:2];
             [inv setArgument:&winLevel atIndex:3];
             [inv invoke];
-
-            BOOL result = NO;
-            if ([[inv methodSignature] methodReturnLength] > 0) {
-                [inv getReturnValue:&result];
+            if (changed) {
+                BOOL result = NO;
+                if ([[inv methodSignature] methodReturnLength] > 0)
+                    [inv getReturnValue:&result];
+                HUD_LOG(@"SBS 2-arg result=%d", result);
             }
-            HUD_LOG(@"SBS 2-arg result=%d ctx=%u level=%.0f", result, contextId, winLevel);
             return;
         }
 
-        HUD_LOG(@"SBS: NO known selector responds!");
+        HUD_LOG(@"SBS: no known selector responds");
     } @catch (NSException *e) {
-        HUD_LOG(@"attachWindowToHostingController failed: %@", e);
+        HUD_LOG(@"SBS attach failed: %@", e);
     }
 }
 
@@ -487,7 +409,6 @@ unsigned int touchWindowContextId(void) {
 void hudTriggerSBSRecovery(void) {
     HUDController *hc = [HUDController shared];
     if (!hc.hostingController) {
-        HUD_LOG(@"SBS recovery: no hosting controller, re-initializing...");
         [hc setupHostingController];
         return;
     }
@@ -498,19 +419,14 @@ void hudTriggerSBSRecovery(void) {
     if (hc.touchWindow && [hc.touchWindow respondsToSelector:@selector(_contextId)])
         touchCtx = (unsigned int)[hc.touchWindow _contextId];
 
-    HUD_LOG(@"SBS recovery triggered: hudCtx=%u touchCtx=%u", hudCtx, touchCtx);
+    HUD_LOG(@"SBS recovery: hudCtx=%u touchCtx=%u", hudCtx, touchCtx);
 
     if (hudCtx != 0 || touchCtx != 0) {
-        // 至少有一个 contextId 恢复了 (可能是 CAMetalLayer 重建带来的)
-        if (hc.hudWindow && hudCtx != 0) {
+        if (hc.hudWindow && hudCtx != 0)
             attachWindowToHostingController(hc.hudWindow, hc.hostingController);
-        }
-        if (hc.touchWindow && touchCtx != 0) {
+        if (hc.touchWindow && touchCtx != 0)
             attachWindowToHostingController(hc.touchWindow, hc.hostingController);
-        }
     } else {
-        // 两个都是 0 — 走完整恢复流程
-        HUD_LOG(@"SBS recovery: both ctx=0, running full reRegisterSBSHosting");
         [hc reRegisterSBSHosting];
     }
 }
