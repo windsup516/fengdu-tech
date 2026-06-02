@@ -4,21 +4,20 @@
 
 #import <Foundation/Foundation.h>
 #import <mach/mach.h>
-#import <mach/mach_vm.h>
 #import <dlfcn.h>
 #import "Logging.h"
 
-// ARM64 thread state for remote thread creation
-typedef struct {
-    uint64_t x[29];  // x0-x28
-    uint64_t fp;     // x29 (frame pointer)
-    uint64_t lr;     // x30 (link register)
-    uint64_t sp;     // stack pointer
-    uint64_t pc;     // program counter
-    uint32_t cpsr;   // program status register
-} ARM64ThreadState;
+// mach_vm functions (declared manually — mach_vm.h is unsupported in theos SDK)
+extern kern_return_t mach_vm_allocate(task_t task, mach_vm_address_t *addr,
+    mach_vm_size_t size, int flags);
+extern kern_return_t mach_vm_deallocate(task_t task, mach_vm_address_t addr,
+    mach_vm_size_t size);
+extern kern_return_t mach_vm_write(task_t task, mach_vm_address_t addr,
+    vm_offset_t data, mach_msg_type_number_t size);
+extern kern_return_t mach_vm_protect(task_t task, mach_vm_address_t addr,
+    mach_vm_size_t size, boolean_t set_maximum, vm_prot_t new_protection);
 
-#define ARM_THREAD_STATE64_COUNT 68  // sizeof(ARM64ThreadState) / sizeof(uint32_t)
+// arm_thread_state64_t and ARM_THREAD_STATE64_COUNT are from <mach/arm/thread_status.h>
 
 // === Core injection: allocate + write + create remote thread ===
 static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
@@ -134,7 +133,7 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     }
 
     // Step 8: Create remote thread with proper ARM state
-    ARM64ThreadState state;
+    arm_thread_state64_t state;
     memset(&state, 0, sizeof(state));
     state.pc = codeAddr;
     state.sp = stackAddr;
