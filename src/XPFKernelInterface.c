@@ -11,6 +11,14 @@
 
 #define XPF_WEAK __attribute__((weak))
 
+// === Dylib 函数指针 (全局, 由 main.m 的 resolve_dylib_functions 赋值) ===
+kern_return_t (*dylib_kern_reading)(mach_port_t task, uint64_t addr, void *buf, size_t *size) = NULL;
+kern_return_t (*dylib_kern_writing)(mach_port_t task, uint64_t addr, void *buf, size_t size) = NULL;
+uint64_t (*dylib_kcall)(uint64_t func, uint64_t *args, int arg_count, uint64_t *result) = NULL;
+void * (*dylib_kalloc)(uint64_t size) = NULL;
+uint64_t (*dylib_physread64)(uint64_t phys_addr) = NULL;
+int (*dylib_physwritebuf)(uint64_t phys_addr, void *buffer, size_t size) = NULL;
+
 // === 内核状态 ===
 static struct {
     mach_port_t kernel_task;

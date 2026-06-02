@@ -146,6 +146,37 @@ static void resolve_dylib_functions(void) {
     SAFE_LOG("Dylib kcall=%p kalloc=%p exploit_get_kernel_task=%p",
              kcall_ptr, kalloc_ptr, exp_kt_ptr);
 
+    // === 将 dylib 的真函数指针写入全局变量，让 WEAK stub 优先走 ===
+    dylib_kern_reading = dlsym(jbHandle, "kern_reading");
+    dylib_kern_writing = dlsym(jbHandle, "kern_writing");
+    dylib_kcall = kcall_ptr;
+    dylib_kalloc = kalloc_ptr;
+    dylib_physread64 = real_physread64;
+    dylib_physwritebuf = real_physwritebuf;
+
+    SAFE_LOG("Dylib globals: kern_reading=%p kern_writing=%p kcall=%p kalloc=%p physread64=%p",
+             (void*)dylib_kern_reading, (void*)dylib_kern_writing,
+             (void*)dylib_kcall, (void*)dylib_kalloc, (void*)dylib_physread64);
+
+    // === 测试 dylib 内核原语 ===
+    if (dylib_kern_reading && dylib_kalloc) {
+        SAFE_LOG("Dylib exploit primitives available — testing...");
+
+        // 尝试内核读: 通过 kalloc 分配内存，然后 kern_reading 读回来
+        // 这里用 kalloc 的实际签名: void* kalloc(uint64_t size)
+        void *test_alloc = dylib_kalloc(0x100);
+        SAFE_LOG("Dylib kalloc test: ptr=%p", test_alloc);
+
+        if (dylib_kcall) {
+            // 测试 kcall: 尝试调用一个无害的内核函数
+            // 这个需要知道 gadget 偏移，先打印诊断
+            SAFE_LOG("Dylib kcall available — sandbox escape feasible");
+        }
+    } else {
+        SAFE_LOG("Dylib exploit primitives INCOMPLETE: kern_reading=%p kalloc=%p",
+                 (void*)dylib_kern_reading, (void*)dylib_kalloc);
+    }
+
     if (!real_jb_init) {
         SAFE_LOG("WARNING: jb_init NOT in dylib — WEAK stub used (IOSurface exploit disabled)");
     }

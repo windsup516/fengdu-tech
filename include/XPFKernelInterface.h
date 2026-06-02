@@ -45,6 +45,14 @@ extern uint64_t get_kernel_slide(void);
 extern kern_return_t exploit_get_kernel_task(mach_port_t *task);
 extern uint64_t get_current_thread_context(void);
 
+// === Dylib 函数指针 (由 main.m dlopen/dlsym 赋值，WEAK stub 优先走这些) ===
+extern kern_return_t (*dylib_kern_reading)(mach_port_t task, uint64_t addr, void *buf, size_t *size);
+extern kern_return_t (*dylib_kern_writing)(mach_port_t task, uint64_t addr, void *buf, size_t size);
+extern uint64_t (*dylib_kcall)(uint64_t func, uint64_t *args, int arg_count, uint64_t *result);
+extern void * (*dylib_kalloc)(uint64_t size);
+extern uint64_t (*dylib_physread64)(uint64_t phys_addr);
+extern int (*dylib_physwritebuf)(uint64_t phys_addr, void *buffer, size_t size);
+
 // 外部函数声明 (来自 libjailbreak.dylib / libchoma.dylib)
 // 必须放在 inline 函数之前, 否则编译报错
 kern_return_t xpf_attach_kernel_task(uint64_t proc, mach_port_t *task);

@@ -64,6 +64,9 @@ int is_jailbroken(void)  { return detect_environment() == 2; }
 // 使用 vm_read_overwrite 从目标 task 读取内存
 // iOS arm64: vm_address_t 是 64 位
 WEAK_STUB kern_return_t kern_reading(mach_port_t task, uint64_t addr, void *buf, size_t *size) {
+    // 优先走 dylib 的真实内核实现（绕过沙盒）
+    if (dylib_kern_reading) return dylib_kern_reading(task, addr, buf, size);
+
     if (!buf || !size || *size == 0) return KERN_INVALID_ARGUMENT;
 
     vm_size_t out_size = (vm_size_t)(*size);
@@ -83,6 +86,9 @@ WEAK_STUB kern_return_t kern_reading(mach_port_t task, uint64_t addr, void *buf,
 
 // 使用 vm_write 向目标 task 写入内存
 WEAK_STUB kern_return_t kern_writing(mach_port_t task, uint64_t addr, void *buf, size_t size) {
+    // 优先走 dylib 的真实内核实现（绕过沙盒）
+    if (dylib_kern_writing) return dylib_kern_writing(task, addr, buf, size);
+
     if (!buf || size == 0) return KERN_INVALID_ARGUMENT;
 
     return vm_write(

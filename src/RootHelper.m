@@ -13,7 +13,10 @@
 #import <signal.h>
 #import <dlfcn.h>
 #import <spawn.h>
-#import <libproc.h>
+
+// libproc 私有 API — SDK 可能不包含此头文件
+extern int proc_listallpids(void *buffer, int buffersize);
+extern int proc_name(int pid, void *buffer, uint32_t buffersize);
 
 #define HELPER_SOCK_PATH "/tmp/deltaforce_helper.sock"
 #define GAME_PROCESS_NAME "DeltaForceClient"
