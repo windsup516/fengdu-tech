@@ -63,8 +63,17 @@ extern kern_return_t mach_vm_protect(task_t task, mach_vm_address_t addr,
 
 // arm_thread_state64_t and ARM_THREAD_STATE64_COUNT are from <mach/arm/thread_status.h>
 
-// === Core injection: allocate + write + create remote thread ===
-// dylibPath MUST be a path accessible to the remote process (e.g., /tmp/xxx)
+// Helper: encode a 64-bit immediate into movz/movk instructions for reg (Rd)
+static void encode_mov64(uint32_t *out, int *ci, int rd, uint64_t val) {
+    out[(*ci)++] = 0xD2800000 | ((val & 0xFFFF) << 5) | rd;
+    out[(*ci)++] = 0xF2A00000 | (((val >> 16) & 0xFFFF) << 5) | rd;
+    out[(*ci)++] = 0xF2C00000 | (((val >> 32) & 0xFFFF) << 5) | rd;
+    out[(*ci)++] = 0xF2E00000 | (((val >> 48) & 0xFFFF) << 5) | rd;
+}
+
+// === Core injection: write dylib into game memory, shellcode writes to file + dlopen ===
+// iOS /tmp/ is SANDBOXED per-app, so Stocks can't write a file the game can read.
+// Instead: copy dylib bytes into game memory, shellcode writes them to game's own /tmp/
 static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     task_t remoteTask = MACH_PORT_NULL;
     kern_return_t kr;
@@ -78,118 +87,234 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     }
     SAFE_LOG(@">> task_for_pid(%d) OK, task_port=0x%x", pid, remoteTask);
 
-    // Step 2: Find dlopen in dyld_shared_cache (same address in all processes)
+    // Step 2: Read dylib file into local buffer + resolve shared cache functions
     void *dlopenPtr = dlsym(RTLD_DEFAULT, "dlopen");
-    if (!dlopenPtr) {
-        SAFE_LOG(@">> dlsym(dlopen) FAILED");
+    void *openPtr  = dlsym(RTLD_DEFAULT, "open");
+    void *writePtr = dlsym(RTLD_DEFAULT, "write");
+    void *closePtr = dlsym(RTLD_DEFAULT, "close");
+    if (!dlopenPtr || !openPtr || !writePtr || !closePtr) {
+        SAFE_LOG(@">> dlsym FAILED: dlopen=%p open=%p write=%p close=%p",
+                 dlopenPtr, openPtr, writePtr, closePtr);
         mach_port_deallocate(mach_task_self(), remoteTask);
         return KERN_FAILURE;
     }
-    SAFE_LOG(@">> dlopen @ %p", dlopenPtr);
+    SAFE_LOG(@">> dlopen=%p open=%p write=%p close=%p",
+             dlopenPtr, openPtr, writePtr, closePtr);
 
-    // Step 3: Allocate remote memory for dylib path + stack
+    // Read dylib from local filesystem
+    FILE *df = fopen(dylibPath, "rb");
+    if (!df) {
+        SAFE_LOG(@">> fopen(%s) FAILED", dylibPath);
+        mach_port_deallocate(mach_task_self(), remoteTask);
+        return KERN_FAILURE;
+    }
+    fseek(df, 0, SEEK_END);
+    size_t dylibSize = ftell(df);
+    fseek(df, 0, SEEK_SET);
+    uint8_t *dylibData = (uint8_t *)malloc(dylibSize);
+    if (!dylibData || fread(dylibData, 1, dylibSize, df) != dylibSize) {
+        SAFE_LOG(@">> read dylib FAILED (size=%zu)", dylibSize);
+        free(dylibData); fclose(df);
+        mach_port_deallocate(mach_task_self(), remoteTask);
+        return KERN_FAILURE;
+    }
+    fclose(df);
+    SAFE_LOG(@">> dylib read: %zu bytes", dylibSize);
+
+    // Strip code signature from in-memory dylib before writing to game
+    uint32_t *magic = (uint32_t *)dylibData;
+    if (*magic == MH_MAGIC_64) {
+        struct mach_header_64 *hdr = (struct mach_header_64 *)dylibData;
+        uint8_t *cmdPtr = dylibData + sizeof(struct mach_header_64);
+        for (uint32_t i = 0; i < hdr->ncmds; i++) {
+            struct load_command *lc = (struct load_command *)cmdPtr;
+            if (lc->cmd == LC_CODE_SIGNATURE) {
+                lc->cmd = 0;
+                break;
+            }
+            cmdPtr += lc->cmdsize;
+        }
+    }
+
+    // Step 3: Allocate remote memory: path + dylib_data + shellcode + stack
     size_t pathLen = strlen(dylibPath) + 1;
-    size_t allocSize = pathLen + 0x4000; // path + 16KB for stack
+    size_t pathOff = 0;
+    size_t dataOff = (pathLen + 0xFF) & ~0xFF; // 256-byte align
+    size_t dataSize = (dylibSize + 0xFF) & ~0xFF;
+    size_t codeOff = dataOff + dataSize;
+    size_t stackOff = codeOff + 0x2000;
+    size_t allocSize = stackOff + 0x4000; // +16KB stack
 
     kr = mach_vm_allocate(remoteTask, &remoteBase, allocSize, VM_FLAGS_ANYWHERE);
     if (kr != KERN_SUCCESS) {
         SAFE_LOG(@">> vm_allocate FAILED: %s", mach_error_string(kr));
+        free(dylibData);
         mach_port_deallocate(mach_task_self(), remoteTask);
         return kr;
     }
     SAFE_LOG(@">> remote mem @ 0x%llx (%zu bytes)", remoteBase, allocSize);
 
-    // Step 4: Write dylib path
-    kr = mach_vm_write(remoteTask, remoteBase,
+    // Step 4: Write path string
+    kr = mach_vm_write(remoteTask, remoteBase + pathOff,
                        (vm_offset_t)dylibPath, (mach_msg_type_number_t)pathLen);
     if (kr != KERN_SUCCESS) {
-        SAFE_LOG(@"Inject: vm_write failed: %s", mach_error_string(kr));
+        SAFE_LOG(@"Inject: path write failed: %s", mach_error_string(kr));
         goto cleanup;
     }
 
-    // Step 5: Build ARM64 shellcode at remoteBase + pathLen + 0x1000
-    uint64_t codeAddr = (remoteBase + 0x2000) & ~0xFFFULL;
-    uint64_t stackAddr = codeAddr + 0x2000;
+    // Step 5: Write dylib data bytes
+    kr = mach_vm_write(remoteTask, remoteBase + dataOff,
+                       (vm_offset_t)dylibData, (mach_msg_type_number_t)dylibSize);
+    free(dylibData);
+    if (kr != KERN_SUCCESS) {
+        SAFE_LOG(@"Inject: dylib data write failed: %s", mach_error_string(kr));
+        goto cleanup;
+    }
 
-    // ARM64 assembly:
-    //   sub sp, sp, #32
+    // Step 6: Build shellcode
+    // Layout:
+    //   x19 = path addr (callee-saved)
+    //   x20 = dylib data addr
+    //   x21 = dylib size
+    //   x22 = fd (saved across calls)
+    //
+    //   sub sp, sp, #64
     //   stp x29, x30, [sp, #16]
+    //   stp x21, x22, [sp, #32]
+    //   stp x19, x20, [sp, #48]
     //   add x29, sp, #16
-    //   movz x0, #<path_lo> ; movk x0, #...   // path arg
-    //   movz x1, #9                            // RTLD_LAZY | RTLD_GLOBAL
-    //   movz x16, #<dlopen_lo> ; movk x16, #...
-    //   blr x16                                // dlopen(path, RTLD_LAZY|RTLD_GLOBAL)
-    //   cbz x0, .Lexit                         // if NULL, skip constructor call
+    //
+    //   ; Load addresses into x19,x20,x21
+    //   movz x19, path_lo; movk ...    ; path
+    //   movz x20, data_lo; movk ...    ; dylib_data
+    //   movz  w21, size_lo; movk ...   ; size (32-bit fits <4GB)
+    //
+    //   ; open(path, O_CREAT|O_WRONLY|O_TRUNC, 0644)
+    //   mov x0, x19
+    //   movz x1, #0x601
+    //   movz x2, #0x1A4
+    //   movz x16, open_lo; movk ...
+    //   blr x16
+    //   mov x22, x0           ; save fd
+    //
+    //   ; write(fd, data, size)
+    //   mov x1, x20
+    //   mov x2, x21           ; x0 still has fd
+    //   movz x16, write_lo; movk ...
+    //   blr x16
+    //
+    //   ; close(fd)
+    //   mov x0, x22
+    //   movz x16, close_lo; movk ...
+    //   blr x16
+    //
+    //   ; dlopen(path, RTLD_LAZY|RTLD_GLOBAL)
+    //   mov x0, x19
+    //   movz x1, #9
+    //   movz x16, dlopen_lo; movk ...
+    //   blr x16
+    //
+    //   ; Cleanup & exit
+    //   cbz x0, .Lexit
+    //   ldp x19, x20, [sp, #48]
+    //   ldp x21, x22, [sp, #32]
     //   ldp x29, x30, [sp, #16]
-    //   add sp, sp, #32
+    //   add sp, sp, #64
     // .Lexit:
     //   mov x0, #0
-    //   mov x16, #1                            // SYS_exit
-    //   svc #0x80                              // thread exit (no crash)
+    //   mov x16, #1
+    //   svc #0x80
 
-    uint32_t shellcode[40];
+    uint64_t pathAddr = remoteBase + pathOff;
+    uint64_t dataAddr = remoteBase + dataOff;
+    uint64_t fn_dlopen = (uint64_t)dlopenPtr;
+    uint64_t fn_open   = (uint64_t)openPtr;
+    uint64_t fn_write  = (uint64_t)writePtr;
+    uint64_t fn_close  = (uint64_t)closePtr;
+
+    uint32_t sc[128];
     int ci = 0;
-    uint64_t path = remoteBase;
-    uint64_t fn = (uint64_t)dlopenPtr;
 
-    shellcode[ci++] = 0xD10083FF; // sub sp, sp, #32
-    shellcode[ci++] = 0xA9017BFD; // stp x29, x30, [sp, #16]
-    shellcode[ci++] = 0x910043FD; // add x29, sp, #16
+    // Prologue
+    sc[ci++] = 0xD10103FF; // sub sp, sp, #64
+    sc[ci++] = 0xA9027BFD; // stp x29, x30, [sp, #16]
+    sc[ci++] = 0xA90355F6; // stp x22, x21, [sp, #32]  (note: x22 low, x21 high)
+    sc[ci++] = 0xA9044FF4; // stp x20, x19, [sp, #48]  (x20 low, x19 high)
+    sc[ci++] = 0x910043FD; // add x29, sp, #16
 
-    // movz/movk x0 with path address
-    shellcode[ci++] = 0xD2800000 | ((path & 0xFFFF) << 5);
-    shellcode[ci++] = 0xF2A00000 | (((path >> 16) & 0xFFFF) << 5);
-    shellcode[ci++] = 0xF2C00000 | (((path >> 32) & 0xFFFF) << 5);
-    shellcode[ci++] = 0xF2E00000 | (((path >> 48) & 0xFFFF) << 5);
+    // Load path addr into x19
+    encode_mov64(sc, &ci, 19, pathAddr);
 
-    // x1 = RTLD_LAZY(1) | RTLD_GLOBAL(8) = 9
-    shellcode[ci++] = 0xD2800121; // mov x1, #9
+    // Load data addr into x20
+    encode_mov64(sc, &ci, 20, dataAddr);
 
-    // movz/movk x16 with dlopen address
-    shellcode[ci++] = 0xD2800000 | ((fn & 0xFFFF) << 5) | 0x10;
-    shellcode[ci++] = 0xF2A00000 | (((fn >> 16) & 0xFFFF) << 5) | 0x10;
-    shellcode[ci++] = 0xF2C00000 | (((fn >> 32) & 0xFFFF) << 5) | 0x10;
-    shellcode[ci++] = 0xF2E00000 | (((fn >> 48) & 0xFFFF) << 5) | 0x10;
+    // Load size into w21 (lower 32 bits; dylib < 4GB)
+    encode_mov64(sc, &ci, 21, dylibSize);
 
-    shellcode[ci++] = 0xD63F0200; // blr x16
-    // x0 now = dlopen() return value (handle or NULL)
+    // open(path, O_CREAT|O_WRONLY|O_TRUNC, 0644)
+    sc[ci++] = 0xAA1303E0; // mov x0, x19
+    sc[ci++] = 0xD280C021; // movz x1, #0x601
+    sc[ci++] = 0xD2803482; // movz x2, #0x1A4
+    encode_mov64(sc, &ci, 16, fn_open);
+    sc[ci++] = 0xD63F0200; // blr x16
+    sc[ci++] = 0xAA0003F6; // mov x22, x0  (save fd)
 
-    shellcode[ci++] = 0xB4000040; // cbz x0, skip_cleanup (skip stack restore if NULL)
-    shellcode[ci++] = 0xA9417BFD; // ldp x29, x30, [sp, #16]
-    shellcode[ci++] = 0x910083FF; // add sp, sp, #32
+    // write(fd, data, size)
+    sc[ci++] = 0xAA1403E1; // mov x1, x20
+    sc[ci++] = 0xAA1503E2; // mov x2, x21 (x0 still = fd)
+    encode_mov64(sc, &ci, 16, fn_write);
+    sc[ci++] = 0xD63F0200; // blr x16
 
-    // skip_cleanup: thread exit via SYS_exit (no crash even if dlopen failed)
-    shellcode[ci++] = 0xD2800000; // mov x0, #0
-    shellcode[ci++] = 0xD2800021; // mov x1, #1 (= SYS_exit on iOS/arm64)
-    shellcode[ci++] = 0xD2800010; // mov x16, #1
-    shellcode[ci++] = 0xD4000801; // svc #0x80
+    // close(fd)
+    sc[ci++] = 0xAA1603E0; // mov x0, x22
+    encode_mov64(sc, &ci, 16, fn_close);
+    sc[ci++] = 0xD63F0200; // blr x16
+
+    // dlopen(path, RTLD_LAZY|RTLD_GLOBAL)
+    sc[ci++] = 0xAA1303E0; // mov x0, x19
+    sc[ci++] = 0xD2800121; // mov x1, #9
+    encode_mov64(sc, &ci, 16, fn_dlopen);
+    sc[ci++] = 0xD63F0200; // blr x16
+
+    // cbz x0, skip_cleanup
+    sc[ci++] = 0xB4000060; // cbz x0, +12 bytes (skip 3 insns: ldp x2, ldp x2, add)
+    // Restore callee-saved regs
+    sc[ci++] = 0xA9444FF4; // ldp x20, x19, [sp, #48]
+    sc[ci++] = 0xA94355F6; // ldp x22, x21, [sp, #32]
+    sc[ci++] = 0xA9427BFD; // ldp x29, x30, [sp, #16]
+    sc[ci++] = 0x910103FF; // add sp, sp, #64
+
+    // Thread exit
+    sc[ci++] = 0xD2800000; // mov x0, #0
+    sc[ci++] = 0xD2800010; // mov x16, #1 (SYS_exit)
+    sc[ci++] = 0xD4000801; // svc #0x80
 
     size_t codeSize = ci * sizeof(uint32_t);
+    uint64_t codeAddr = remoteBase + codeOff;
+    uint64_t stackAddr = remoteBase + stackOff;
 
-    // Step 6: Write shellcode
-    kr = mach_vm_write(remoteTask, codeAddr, (vm_offset_t)shellcode,
+    // Write shellcode
+    kr = mach_vm_write(remoteTask, codeAddr, (vm_offset_t)sc,
                        (mach_msg_type_number_t)codeSize);
     if (kr != KERN_SUCCESS) {
         SAFE_LOG(@"Inject: shellcode write failed: %s", mach_error_string(kr));
         goto cleanup;
     }
 
-    // Step 7: Make code executable
+    // Make code executable
     kr = mach_vm_protect(remoteTask, codeAddr, 0x4000, FALSE,
                          VM_PROT_READ | VM_PROT_EXECUTE);
     if (kr != KERN_SUCCESS) {
         SAFE_LOG(@"Inject: vm_protect failed: %s (continuing anyway)", mach_error_string(kr));
     }
 
-    // Step 8: Create remote thread with proper ARM state
+    // Create remote thread
     arm_thread_state64_t state;
     memset(&state, 0, sizeof(state));
     state.__pc = codeAddr;
     state.__sp = stackAddr;
     state.__fp = 0;
     state.__lr = 0;
-    state.__x[0] = path;
-    state.__x[1] = 9; // RTLD_LAZY | RTLD_GLOBAL
     state.__cpsr = 0;
 
     thread_act_t remoteThread = MACH_PORT_NULL;
@@ -201,7 +326,7 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
         goto cleanup;
     }
 
-    SAFE_LOG(@">> remote thread RUNNING — dlopen(%s) executing in game", dylibPath);
+    SAFE_LOG(@">> remote thread RUNNING — shellcode writes %zu-byte dylib to game /tmp/, then dlopen", dylibSize);
     mach_port_deallocate(mach_task_self(), remoteThread);
     mach_port_deallocate(mach_task_self(), remoteTask);
     return KERN_SUCCESS;
@@ -232,28 +357,22 @@ int inject_dylib_to_pid(pid_t pid, const char *dylibName) {
 
     SAFE_LOG(@">> dylib source: %s", [fwPath UTF8String]);
 
-    // Copy to /tmp/ so game process can read it (iOS sandbox prevents cross-app bundle access)
-    NSString *tmpPath = [NSString stringWithFormat:@"/tmp/%s", dylibName];
-    NSError *copyErr = nil;
-    [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil];
-    if (![[NSFileManager defaultManager] copyItemAtPath:fwPath toPath:tmpPath error:&copyErr]) {
-        SAFE_LOG(@">> INJECT FAIL: copy to /tmp/ failed: %s", [[copyErr description] UTF8String]);
-        return -1;
-    }
-    SAFE_LOG(@">> dylib copied to: %s", [tmpPath UTF8String]);
-
-    // CRITICAL: Strip code signature — dylib is signed for Stocks.app
-    // but loaded by DeltaForce game process. AMFI kills the game if
-    // it sees a foreign-signed dylib being dlopen'd.
-    strip_macho_signature([tmpPath UTF8String]);
-
-    const char *path = [tmpPath UTF8String];
+    // inject_via_mach reads the dylib bytes and writes them into game memory.
+    // Shellcode in game writes bytes to game's OWN /tmp/ (iOS sandbox per-app),
+    // then dlopens that file. The path "/tmp/DFOverlay.dylib" is relative to
+    // the game's sandbox container.
+    const char *remotePath = "/tmp/DFOverlay.dylib";
 
     // Method 1: Try xpf_inject_dylib from libjailbreak
     typedef int (*xpf_inject_func)(int, const char*);
     xpf_inject_func xpf_inject = (xpf_inject_func)dlsym(RTLD_DEFAULT, "xpf_inject_dylib");
     if (xpf_inject) {
-        int ret = xpf_inject(pid, path);
+        // Copy + strip for xpf (it uses a file path)
+        NSString *tmpPath = @"/tmp/DFOverlay.dylib";
+        [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil];
+        [[NSFileManager defaultManager] copyItemAtPath:fwPath toPath:tmpPath error:nil];
+        strip_macho_signature([tmpPath UTF8String]);
+        int ret = xpf_inject(pid, [tmpPath UTF8String]);
         if (ret == 0) {
             SAFE_LOG(@">> xpf_inject_dylib OK");
             return 0;
@@ -263,8 +382,9 @@ int inject_dylib_to_pid(pid_t pid, const char *dylibName) {
         SAFE_LOG(@">> xpf_inject_dylib not available, using Mach VM");
     }
 
-    // Method 2: Mach VM injection
-    kern_return_t kr = inject_via_mach(pid, path);
+    // Method 2: Mach VM injection — writes dylib bytes into game memory,
+    // shellcode writes them to game's sandboxed /tmp/ then dlopen
+    kern_return_t kr = inject_via_mach(pid, [fwPath UTF8String]);
     if (kr == KERN_SUCCESS) {
         SAFE_LOG(@">> Mach VM injection OK — dylib constructor should fire now");
         return 0;
