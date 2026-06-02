@@ -26,8 +26,14 @@ float g_screenHeight = 0.0f;
 
 static id<MTLCommandQueue> gCmdQueue = nil;
 
-// 防止 viewDidLoad 被多次调用（内存警告可能导致 view 被卸载重载）
+// 防止 viewDidLoad 被多次调用
 static BOOL g_imGuiInitialized = NO;
+
+// contextId 访问器 (定义在 HUDController.m, C linkage)
+extern "C" {
+unsigned int hudWindowContextId(void);
+unsigned int touchWindowContextId(void);
+}
 
 @interface HUDRootViewController ()
 @property (nonatomic, strong) CADisplayLink *displayLink;
@@ -165,8 +171,6 @@ static BOOL g_imGuiInitialized = NO;
                 gMetalLayer.opaque,
                 NSStringFromCGSize(gMetalLayer.drawableSize));
         // contextId 心跳 (需要 HUDMainWindow 暴露 _contextId)
-        extern "C" unsigned int hudWindowContextId(void);
-        extern "C" unsigned int touchWindowContextId(void);
         HUD_LOG(@"[DIAG f#%d] hudCtx=%u touchCtx=%u", diagCount,
                 hudWindowContextId(), touchWindowContextId());
     }
