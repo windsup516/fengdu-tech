@@ -7,13 +7,14 @@
 #import <mach/mach.h>
 #import <mach/vm_map.h>
 #import <mach-o/loader.h>
-#import <sys/sysctl.h>
 
-// proc_pidpath 手动声明 (libproc.h 在 iOS SDK 中不可用)
+// libproc 手动声明 (libproc.h 在 iOS SDK 中不可用)
 #ifndef PROC_PIDPATHINFO_MAXSIZE
 #define PROC_PIDPATHINFO_MAXSIZE 4096
 #endif
 extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
+extern "C" int proc_listallpids(void *buffer, int buffersize);
+extern "C" int proc_name(int pid, void *buffer, uint32_t buffersize);
 #import <dlfcn.h>
 
 #ifndef GAME_PROCESS_NAME
@@ -77,56 +78,46 @@ static void hooks_log(NSString *fmt, ...) {
 
 #pragma mark - 进程查找与附加
 
-// 通过进程名查找 PID (多个候选名)
+// 通过进程名查找 PID — 使用 proc_listallpids (libproc)
+// iOS 15+ 沙箱封堵了 sysctl(KERN_PROC_ALL), 改用 libproc API
 static pid_t find_pid_by_name_multi(const char **names) {
-    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
-    size_t bufSize = 0;
+    // proc_listallpids 返回的 PID 数组, 1024 个够用
+    int pidbuf[1024];
+    int npids = proc_listallpids(pidbuf, sizeof(pidbuf));
 
-    // 首次调用时无条件 dump 进程列表
     static BOOL dumpedOnce = NO;
-    if (!dumpedOnce) {
-        dumpedOnce = YES;
-        if (sysctl(mib, 4, NULL, &bufSize, NULL, 0) != 0) {
-            hooks_log(@"sysctl(KERN_PROC_ALL) size query failed: %d (%s)", errno, strerror(errno));
-            return -1;
-        }
-        struct kinfo_proc *procs = (struct kinfo_proc *)malloc(bufSize);
-        if (!procs) return -1;
-        if (sysctl(mib, 4, procs, &bufSize, NULL, 0) != 0) {
-            hooks_log(@"sysctl(KERN_PROC_ALL) data query failed: %d (%s)", errno, strerror(errno));
-            free(procs);
-            return -1;
-        }
-        int count = (int)(bufSize / sizeof(struct kinfo_proc));
-        hooks_log(@"=== All running processes (first 200 of %d) ===", count);
-        for (int i = 0; i < count && i < 200; i++) {
-            hooks_log(@"  [%d] %s", procs[i].kp_proc.p_pid, procs[i].kp_proc.p_comm);
-        }
-        hooks_log(@"=== End process list ===");
-        free(procs);
-    }
 
-    // 正常搜索
-    if (sysctl(mib, 4, NULL, &bufSize, NULL, 0) != 0) {
-        hooks_log(@"sysctl(KERN_PROC_ALL) failed in search: %d (%s)", errno, strerror(errno));
+    if (npids <= 0) {
+        hooks_log(@"proc_listallpids failed: %d (%s)", npids, strerror(errno));
         return -1;
     }
 
-    struct kinfo_proc *procs = (struct kinfo_proc *)malloc(bufSize);
-    if (!procs) return -1;
-    if (sysctl(mib, 4, procs, &bufSize, NULL, 0) != 0) { free(procs); return -1; }
+    int count = npids;
+    if (!dumpedOnce) {
+        dumpedOnce = YES;
+        hooks_log(@"=== All running processes (first 200 of %d) ===", count);
+        for (int i = 0; i < count && i < 200; i++) {
+            char pname[64] = {0};
+            proc_name(pidbuf[i], pname, sizeof(pname) - 1);
+            hooks_log(@"  [%d] %s", pidbuf[i], pname);
+        }
+        hooks_log(@"=== End process list ===");
+    }
 
-    int count = (int)(bufSize / sizeof(struct kinfo_proc));
     pid_t found = -1;
 
+    // 精确匹配候选名
     for (int i = 0; i < count; i++) {
-        const char *pname = procs[i].kp_proc.p_comm;
-        // 尝试精确匹配所有候选名
+        char pname[64] = {0};
+        proc_name(pidbuf[i], pname, sizeof(pname) - 1);
+        if (pname[0] == '\0') continue;
+
         for (const char **n = names; *n; n++) {
             if (strcasecmp(pname, *n) == 0) {
-                found = procs[i].kp_proc.p_pid;
-                hooks_log(@"Found game process: '%s' PID=%d (matched '%s')", [NSString stringWithUTF8String:pname], found, [NSString stringWithUTF8String:*n]);
-                free(procs);
+                found = pidbuf[i];
+                hooks_log(@"Found game process: '%s' PID=%d (matched '%s')",
+                          [NSString stringWithUTF8String:pname], found,
+                          [NSString stringWithUTF8String:*n]);
                 return found;
             }
         }
@@ -134,18 +125,18 @@ static pid_t find_pid_by_name_multi(const char **names) {
 
     // 子串匹配 (兜底)
     for (int i = 0; i < count; i++) {
-        const char *pname = procs[i].kp_proc.p_comm;
+        char pname[64] = {0};
+        proc_name(pidbuf[i], pname, sizeof(pname) - 1);
         if (strcasestr(pname, "delta") || strcasestr(pname, "dfm") ||
             strcasestr(pname, "tmgp") || strcasestr(pname, "force") ||
             strcasestr(pname, "star")) {
-            found = procs[i].kp_proc.p_pid;
-            hooks_log(@"Found game process via substring: '%s' PID=%d", [NSString stringWithUTF8String:pname], found);
-            free(procs);
+            found = pidbuf[i];
+            hooks_log(@"Found game process via substring: '%s' PID=%d",
+                      [NSString stringWithUTF8String:pname], found);
             return found;
         }
     }
 
-    free(procs);
     return -1;
 }
 
