@@ -397,25 +397,34 @@ static void install_crash_handlers(void) {
     }
     self.cheatStarted = YES;
     SAFE_LOG(@"授权成功，正在启动辅助...");
+    NSLog(@"=== 风度: startCheatDirectly ===");
 
     // 获取 scene
     id scene = self.window.windowScene;
+    NSLog(@"startCheatDirectly: windowScene=%@", scene);
     if (!scene) {
         scene = [UIApplication sharedApplication].connectedScenes.anyObject;
+        NSLog(@"startCheatDirectly: fallback scene=%@", scene);
     }
 
     // 创建悬浮窗
     HUDController *hud = [HUDController shared];
+    NSLog(@"startCheatDirectly: creating HUD windows with scene=%@", scene);
     @try {
         [hud createWindowsOnScene:scene];
         SAFE_LOG(@"HUD windows created OK");
+        NSLog(@"startCheatDirectly: HUD windows created OK, windowsCreated=%d", hud.windowsCreated);
     } @catch (NSException *e) {
         SAFE_LOG(@"HUD create failed: %s", [[e description] UTF8String]);
+        NSLog(@"startCheatDirectly: HUD create EXCEPTION: %@", e);
     }
 
     if (hud.windowsCreated) {
         [hud show];
         SAFE_LOG(@"HUD overlay started");
+        NSLog(@"startCheatDirectly: HUD overlay shown");
+    } else {
+        NSLog(@"startCheatDirectly: HUD windows NOT created, skipping show");
     }
 
     // ====== 诊断0: 运行时 binary hash (确认手机上的二进制 == CI artifact) ======

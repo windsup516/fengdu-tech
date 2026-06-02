@@ -94,11 +94,19 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
     if (self.windowsCreated) return;
     self.windowsCreated = YES;
 
+    NSLog(@"[HUD] createWindowsOnScene called, scene=%@", scene);
+
     // 确保在主线程 + 窗口 scene 已就绪
     if (!scene) {
         HUD_LOG(@"createWindowsOnScene: scene is nil, aborting");
-        self.windowsCreated = NO;
-        return;
+        NSLog(@"[HUD] FATAL: scene is nil, trying fallback");
+        scene = [UIApplication sharedApplication].connectedScenes.anyObject;
+        if (!scene) {
+            NSLog(@"[HUD] FATAL: no connected scenes at all");
+            self.windowsCreated = NO;
+            return;
+        }
+        NSLog(@"[HUD] fallback scene found: %@", scene);
     }
 
     @try {
@@ -247,6 +255,9 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
 }
 
 - (void)show {
+    NSLog(@"[HUD] show called, windowsCreated=%d hudWindow=%@ touchWindow=%@",
+          self.windowsCreated, self.hudWindow, self.touchWindow);
+
     void (^showBlock)(void) = ^{
         self.hudWindow.hidden = NO;
         self.touchWindow.hidden = NO;
@@ -254,11 +265,14 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         [self.rootVC prepareForEntryAnimation];
         HUD_LOG(@"Windows now visible (hudLevel=%.0f touchLevel=%.0f)",
                 self.hudWindow.windowLevel, self.touchWindow.windowLevel);
+        NSLog(@"[HUD] Windows set visible: hudLevel=%.0f touchLevel=%.0f",
+              self.hudWindow.windowLevel, self.touchWindow.windowLevel);
     };
 
     if ([NSThread isMainThread]) {
         showBlock();
     } else {
+        NSLog(@"[HUD] show called from background thread, dispatching to main");
         dispatch_async(dispatch_get_main_queue(), showBlock);
     }
 

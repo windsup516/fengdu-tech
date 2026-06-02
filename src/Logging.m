@@ -13,6 +13,8 @@
 
 static FILE *g_centralLogFile = NULL;
 
+static BOOL g_logInitReported = NO;
+
 void central_log(const char *tag, NSString *fmt, ...) {
     // Step 1: Format the message
     va_list args;
@@ -22,6 +24,12 @@ void central_log(const char *tag, NSString *fmt, ...) {
 
     // Step 2: Always write to stderr (visible in Xcode console / idevicesyslog)
     fprintf(stderr, "[%s] %s\n", tag, [msg UTF8String]);
+
+    // One-time init report via NSLog (always visible in device console)
+    if (!g_logInitReported) {
+        g_logInitReported = YES;
+        NSLog(@"[Logger] central_log initialized, stderr+file logging active");
+    }
 
     // Step 3: Lazy-init file handle (no lock — debug logging tolerates rare interleaving)
     if (!g_centralLogFile) {
