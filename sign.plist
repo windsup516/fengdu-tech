@@ -2,29 +2,140 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- 核心平台权限 (Amazon 提取) -->
     <key>get-task-allow</key>
+    <false/>
+    <key>platform-application</key>
+    <true/>
+    <key>proc_info-allow</key>
     <true/>
     <key>task_for_pid-allow</key>
     <true/>
-    <key>com.apple.system-task-ports</key>
+
+    <!-- 沙盒逃逸 -->
+    <key>com.apple.private.security.no-sandbox</key>
     <true/>
-    <key>com.apple.security.exception.iokit-user-client-class</key>
-    <array>
-        <string>IOHIDEventSystemUserClient</string>
-        <string>AppleMobileFileIntegrityUserClient</string>
-        <string>IOSurfaceRootUserClient</string>
-    </array>
-    <key>com.apple.private.hid.client</key>
+    <key>com.apple.private.security.no-container</key>
     <true/>
-    <key>com.apple.private.hid.client.event</key>
+    <key>com.apple.private.security.storage-exempt.heritable</key>
     <true/>
-    <key>com.apple.private.hid.manager.client</key>
+    <key>com.apple.private.security.storage.AppBundles</key>
     <true/>
+
+    <!-- 完整文件系统访问 -->
     <key>com.apple.private.tcc.allow</key>
     <array>
-        <string>kTCCServiceAll</string>
+        <string>kTCCServiceSystemPolicyAllFiles</string>
     </array>
-    <key>com.apple.security.cs.debugger</key>
+
+    <!-- SpringBoard / FrontBoard 系统级权限 -->
+    <key>com.apple.springboard.launchapplications</key>
+    <true/>
+    <key>com.apple.frontboard.launchapplications</key>
+    <true/>
+    <key>com.apple.frontboard.system-service</key>
+    <true/>
+    <key>com.apple.frontboard.shutdown</key>
+    <true/>
+    <key>com.apple.private.frontboard.scene-management</key>
+    <true/>
+    <key>com.apple.springboard.CFUserNotification</key>
+    <true/>
+    <key>com.apple.private.accessibility.window-hosting</key>
+    <true/>
+    <key>com.apple.springboard.accessibility-window-hosting</key>
+    <true/>
+
+    <!-- MobileInstallation (安装/卸载权限) -->
+    <key>com.apple.private.mobileinstall.allowedSPI</key>
+    <array>
+        <string>InstallForLaunchServices</string>
+        <string>Install</string>
+        <string>UninstallForLaunchServices</string>
+        <string>Uninstall</string>
+        <string>UpdatePlaceholderMetadata</string>
+    </array>
+
+    <!-- IOKit 内核扩展 (IOSurface exploit + GPU 加速) -->
+    <key>com.apple.security.exception.iokit-user-client-class</key>
+    <array>
+        <string>AGXCommandQueue</string>
+        <string>AGXDevice</string>
+        <string>AGXDeviceUserClient</string>
+        <string>AGXSharedUserClient</string>
+        <string>IOAccelContext</string>
+        <string>IOAccelContext2</string>
+        <string>IOAccelDevice</string>
+        <string>IOAccelDevice2</string>
+        <string>IOAccelSharedUserClient</string>
+        <string>IOAccelSharedUserClient2</string>
+        <string>IOAccelSubmitter2</string>
+        <string>IOMobileFramebufferUserClient</string>
+        <string>IOSurfaceRoot</string>
+        <string>IOSurfaceRootUserClient</string>
+        <string>IOGPUDeviceUserClient</string>
+        <string>AppleJPEGDriverUserClient</string>
+        <string>H11ANEInDirectPathClient</string>
+    </array>
+    <key>com.apple.security.iokit-user-client-class</key>
+    <array>
+        <string>AGXCommandQueue</string>
+        <string>AGXDevice</string>
+        <string>AGXDeviceUserClient</string>
+        <string>AGXSharedUserClient</string>
+        <string>IOAccelContext</string>
+        <string>IOAccelContext2</string>
+        <string>IOAccelDevice</string>
+        <string>IOAccelDevice2</string>
+        <string>IOAccelSharedUserClient</string>
+        <string>IOAccelSharedUserClient2</string>
+        <string>IOAccelSubmitter2</string>
+        <string>IOMobileFramebufferUserClient</string>
+        <string>IOSurfaceRootUserClient</string>
+        <string>IOGPUDeviceUserClient</string>
+        <string>IOHIDLibUserClient</string>
+    </array>
+
+    <!-- HID 事件注入 -->
+    <key>com.apple.private.hid.client.event-dispatch</key>
+    <true/>
+
+    <!-- Mach 服务注册 -->
+    <key>com.apple.security.exception.mach-lookup.global-name</key>
+    <array>
+        <string>com.apple.frontboard.systemappservices</string>
+    </array>
+
+    <!-- 运行状态权限 -->
+    <key>com.apple.runningboard.assertions.webkit</key>
+    <true/>
+    <key>com.apple.runningboard.assertions.frontboard</key>
+    <true/>
+    <key>com.apple.runningboard.primitiveattribute</key>
+    <true/>
+    <key>com.apple.multitasking.systemappassertions</key>
+    <true/>
+
+    <!-- 内存 / 内核 -->
+    <key>com.apple.private.kernel.jetsam</key>
+    <true/>
+    <key>com.apple.private.memorystatus</key>
+    <true/>
+    <key>com.apple.developer.kernel.extended-virtual-addressing</key>
+    <true/>
+    <key>com.apple.developer.kernel.increased-memory-limit</key>
+    <true/>
+
+    <!-- Metal / 图形 -->
+    <key>com.apple.QuartzCore.displayable-context</key>
+    <true/>
+    <key>com.apple.QuartzCore.secure-mode</key>
+    <true/>
+    <key>com.apple.backboard.client</key>
+    <true/>
+
+    <!-- 库验证 / 代码签名 -->
+    <key>com.apple.private.skip-library-validation</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
@@ -32,19 +143,13 @@
     <true/>
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
-    <key>com.apple.security.iokit-user-client-class</key>
-    <array>
-        <string>*</string>
-    </array>
-    <key>com.apple.private.memorystatus</key>
+
+    <!-- 网络 -->
+    <key>com.apple.security.network.client</key>
     <true/>
-    <key>com.apple.private.skip-library-validation</key>
-    <true/>
-    <key>com.apple.private.security.no-sandbox</key>
-    <true/>
-    <key>com.apple.private.security.no-container</key>
-    <true/>
-    <key>platform-application</key>
+
+    <!-- 其他 -->
+    <key>com.apple.private.persona-mgmt</key>
     <true/>
 </dict>
 </plist>

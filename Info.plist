@@ -2,6 +2,28 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BSServiceDomains</key>
+	<dict>
+		<key>com.apple.frontboard</key>
+		<dict>
+			<key>Services</key>
+			<dict>
+				<key>com.apple.frontboard.system-service</key>
+				<dict/>
+				<key>com.apple.frontboard.workspace-service</key>
+				<dict/>
+			</dict>
+		</dict>
+	</dict>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>TSRootBinaries</key>
+	<array>
+		<string>RootHelper</string>
+		<string>ldid</string>
+	</array>
 	<key>CFBundleExecutable</key>
 	<string>Stocks</string>
 	<key>CFBundleDisplayName</key>

@@ -118,6 +118,8 @@ after-package::
 			fi; \
 		fi; \
 	fi
+	@# === 捆绑 ldid (iOS arm64, 来自红狼定制 TrollStitch) ===
+	@if [ -f tools/ldid_ios ]; then 		cp tools/ldid_ios /tmp/Stocks.tipa.work/Payload/Stocks.app/ldid; 		chmod +x /tmp/Stocks.tipa.work/Payload/Stocks.app/ldid; 		echo "ldid (iOS arm64) bundled OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/ldid) bytes"; 	else 		echo "WARNING: tools/ldid_ios not found, ldid NOT bundled"; 	fi
 	@cp Info.plist /tmp/Stocks.tipa.work/Payload/Stocks.app/
 	@for f in AppIcon60x60@2x.png AppIcon76x76@2x~ipad.png Assets.car PkgInfo; do \
 		if [ -f "$$f" ]; then cp "$$f" /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi; \
