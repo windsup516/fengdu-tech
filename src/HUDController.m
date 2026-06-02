@@ -122,18 +122,18 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         self.hudWindow = [[HUDMainWindow alloc] initWithFrame:screenBounds];
         self.hudWindow.windowScene = scene;
         self.hudWindow.rootViewController = self.rootVC;
-        self.hudWindow.windowLevel = 10000010.0;
         self.hudWindow.hidden = NO;
         [self.hudWindow makeKeyAndVisible];
+        self.hudWindow.windowLevel = 10000010.0;  // set AFTER makeKeyAndVisible (it resets level)
 
         // 步骤4: 创建触摸窗口 (level 10000011)
         self.touchWindow = [[TouchMainWindow alloc] initWithFrame:screenBounds];
         self.touchWindow.windowScene = scene;
         self.touchWindow.hudController = self.rootVC;
         self.touchWindow.rootViewController = self.touchVC;
-        self.touchWindow.windowLevel = 10000011.0;
         self.touchWindow.hidden = NO;
         [self.touchWindow makeKeyAndVisible];
+        self.touchWindow.windowLevel = 10000011.0;  // set AFTER makeKeyAndVisible
 
         gTouchWindow = self.touchWindow;
 
@@ -211,6 +211,8 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
             weakSelf.touchWindow.hidden = NO;
             [weakSelf.hudWindow makeKeyAndVisible];
             [weakSelf.touchWindow makeKeyAndVisible];
+            weakSelf.hudWindow.windowLevel = 10000010.0;
+            weakSelf.touchWindow.windowLevel = 10000011.0;
             HUD_LOG(@"Windows forced visible after background transition");
         });
     }];
@@ -223,6 +225,8 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         if (weakSelf.showing) {
             weakSelf.hudWindow.hidden = NO;
             weakSelf.touchWindow.hidden = NO;
+            weakSelf.hudWindow.windowLevel = 10000010.0;
+            weakSelf.touchWindow.windowLevel = 10000011.0;
             HUD_LOG(@"Windows restored on become active");
         }
     }];
@@ -244,6 +248,42 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
         return;
     }
 
+    // 检查 contextId 是否还有效
+    unsigned int hudCtx = 0, touchCtx = 0;
+    if (self.hudWindow && [self.hudWindow respondsToSelector:@selector(_contextId)]) {
+        hudCtx = (unsigned int)[self.hudWindow _contextId];
+    }
+    if (self.touchWindow && [self.touchWindow respondsToSelector:@selector(_contextId)]) {
+        touchCtx = (unsigned int)[self.touchWindow _contextId];
+    }
+
+    if (hudCtx == 0 || touchCtx == 0) {
+        HUD_LOG(@"reRegisterSBS: contextId lost (hud=%u touch=%u), recreating windows...", hudCtx, touchCtx);
+
+        // 销毁旧窗口
+        self.hudWindow.hidden = YES;
+        self.touchWindow.hidden = YES;
+        self.hudWindow = nil;
+        self.touchWindow = nil;
+        self.hostingController = nil;
+        self.windowsCreated = NO;
+
+        // 重新获取 scene
+        id scene = [UIApplication sharedApplication].connectedScenes.anyObject;
+        if (scene) {
+            [self createWindowsOnScene:scene];
+            if (self.windowsCreated) {
+                [self show];
+                HUD_LOG(@"reRegisterSBS: windows recreated OK");
+            } else {
+                HUD_LOG(@"reRegisterSBS: window recreation FAILED");
+            }
+        } else {
+            HUD_LOG(@"reRegisterSBS: no connected scene, cannot recreate");
+        }
+        return;
+    }
+
     HUD_LOG(@"reRegisterSBS: re-registering both windows...");
     if (self.hudWindow) {
         attachWindowToHostingController(self.hudWindow, self.hostingController);
@@ -261,6 +301,8 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
     void (^showBlock)(void) = ^{
         self.hudWindow.hidden = NO;
         self.touchWindow.hidden = NO;
+        self.hudWindow.windowLevel = 10000010.0;
+        self.touchWindow.windowLevel = 10000011.0;
         self.showing = YES;
         [self.rootVC prepareForEntryAnimation];
         HUD_LOG(@"Windows now visible (hudLevel=%.0f touchLevel=%.0f)",

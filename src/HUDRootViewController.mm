@@ -7,6 +7,7 @@
 #import "MetalRenderer.h"
 #import "ImGuiAdapter.h"
 #import "CryptoUtils.h"
+#import "Logging.h"
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 #import "imgui.h"
@@ -41,6 +42,7 @@ static BOOL g_imGuiInitialized = NO;
 - (void)viewDidLoad {
     [super viewDidLoad];
 
+    HUD_LOG(@"viewDidLoad: starting Metal+ImGui init...");
     self.view.backgroundColor = [UIColor clearColor];
 
     UIScreen *screen = [UIScreen mainScreen];
@@ -50,13 +52,14 @@ static BOOL g_imGuiInitialized = NO;
     g_screenScale = (float)scale;
     g_screenWidth = (float)bounds.size.width;
     g_screenHeight = (float)bounds.size.height;
+    HUD_LOG(@"Screen: %.0fx%.0f scale=%.1f", g_screenWidth, g_screenHeight, g_screenScale);
 
     // ===== 步骤0: 创建 ImGui 上下文 (必须在任何 ImGui 调用之前, 且只创建一次) =====
     if (!g_imGuiInitialized) {
         if (!ImGui::GetCurrentContext()) {
             ImGui::CreateContext();
             ImGui::GetIO().IniFilename = NULL; // 禁用 ini 文件, 避免文件系统检测
-            NSLog(@"[HUD] ImGui context created");
+            HUD_LOG(@"ImGui context created");
         }
     }
 
@@ -90,7 +93,7 @@ static BOOL g_imGuiInitialized = NO;
     if (!g_imGuiInitialized) {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         if (!device) {
-            NSLog(@"[HUD] FATAL: Metal not available");
+            HUD_LOG(@"FATAL: Metal not available on this device");
             return;
         }
         gMetalLayer.device = device;
@@ -113,7 +116,7 @@ static BOOL g_imGuiInitialized = NO;
         // ===== 初始化 ImGui Metal 后端 + 显式创建字体纹理 =====
         ImGui_ImplMetal_Init(device);
         ImGui_ImplMetal_CreateDeviceObjects(device);
-        NSLog(@"[HUD] ImGui Metal backend initialized");
+        HUD_LOG(@"ImGui Metal backend initialized (device=%s)", [[device name] UTF8String]);
     }
 
     // ===== 启动 DisplayLink 60fps 渲染循环 =====
@@ -133,13 +136,18 @@ static BOOL g_imGuiInitialized = NO;
 
     self.rendering = YES;
     g_imGuiInitialized = YES;
-    NSLog(@"[HUD] Metal+ImGui ready (UITextField container, anti-detection)");
+    HUD_LOG(@"Metal+ImGui ready, rendering=%d displayLink=%@", self.rendering, self.displayLink ? @"YES" : @"NIL");
 }
 
 - (void)ChangeUI {
     if (!self.rendering) return;
     if (!gMetalLayer || !gCmdQueue) return;
     if (!ImGui::GetCurrentContext()) return;
+
+    static int frameCount = 0;
+    if (++frameCount == 1 || frameCount % 300 == 0) {
+        HUD_LOG(@"ChangeUI rendering frame #%d", frameCount);
+    }
 
     self.animationTime = CACurrentMediaTime();
 
@@ -187,6 +195,13 @@ static BOOL g_imGuiInitialized = NO;
     [UIView animateWithDuration:0.25 animations:^{
         self.view.alpha = 1.0;
     }];
+    // Safety: if animation fails (window context not ready), force visible after delay
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (self.view.alpha < 0.5) {
+            HUD_LOG(@"Entry animation may not have completed (alpha=%.2f), forcing alpha=1.0", self.view.alpha);
+            self.view.alpha = 1.0;
+        }
+    });
 }
 
 - (void)syncCurrentOrientation {
