@@ -46,7 +46,10 @@ static void resolve_dylib_functions(void) {
     // 从可执行文件路径推算 Frameworks 目录
     char exePath[1024];
     uint32_t sz = (uint32_t)sizeof(exePath);
-    if (_NSGetExecutablePath(exePath, &sz) != 0) return;
+    if (_NSGetExecutablePath(exePath, &sz) != 0) {
+        SAFE_LOG("Dylib resolve: _NSGetExecutablePath failed");
+        return;
+    }
 
     // 构建 libjailbreak.dylib 的绝对路径
     NSString *exeStr = [NSString stringWithUTF8String:exePath];
@@ -54,22 +57,41 @@ static void resolve_dylib_functions(void) {
                          stringByAppendingPathComponent:@"Frameworks"]
                         stringByAppendingPathComponent:@"libjailbreak.dylib"];
 
+    SAFE_LOG("Dylib path: %s", [fwPath UTF8String]);
+
     void *jbHandle = dlopen([fwPath UTF8String], RTLD_NOLOAD | RTLD_LAZY);
     if (!jbHandle) {
         // 尝试用 @rpath
         jbHandle = dlopen("@rpath/libjailbreak.dylib", RTLD_NOLOAD | RTLD_LAZY);
+        if (!jbHandle) {
+            SAFE_LOG("Dylib NOT loaded! dlopen failed: %s", dlerror());
+            return;
+        }
+        SAFE_LOG("Dylib resolved via @rpath");
+    } else {
+        SAFE_LOG("Dylib found at Frameworks path");
     }
 
-    if (jbHandle) {
-        real_jb_init = dlsym(jbHandle, "jb_init");
-        real_physread64 = dlsym(jbHandle, "physread64");
-        real_physwritebuf = dlsym(jbHandle, "physwritebuf");
-        real_phystokv = dlsym(jbHandle, "phystokv");
-        real_xpf_inject_dylib = dlsym(jbHandle, "xpf_inject_dylib");
-        fprintf(stderr, "[main] Resolved dylib funcs: jb_init=%p physread64=%p\n",
-                (void*)real_jb_init, (void*)real_physread64);
-    } else {
-        fprintf(stderr, "[main] libjailbreak.dylib not loaded (err=%s)\n", dlerror());
+    real_jb_init = dlsym(jbHandle, "jb_init");
+    real_physread64 = dlsym(jbHandle, "physread64");
+    real_physwritebuf = dlsym(jbHandle, "physwritebuf");
+    real_phystokv = dlsym(jbHandle, "phystokv");
+    real_xpf_inject_dylib = dlsym(jbHandle, "xpf_inject_dylib");
+
+    SAFE_LOG("Dylib symbols: jb_init=%p physread64=%p physwritebuf=%p phystokv=%p",
+             (void*)real_jb_init, (void*)real_physread64,
+             (void*)real_physwritebuf, (void*)real_phystokv);
+
+    // 额外检查: dylib 是否导出了内核 exploit 相关函数
+    void *kcall_ptr = dlsym(jbHandle, "kcall");
+    void *kalloc_ptr = dlsym(jbHandle, "kalloc");
+    void *exp_kt_ptr = dlsym(jbHandle, "exploit_get_kernel_task");
+    SAFE_LOG("Dylib kcall=%p kalloc=%p exploit_get_kernel_task=%p",
+             kcall_ptr, kalloc_ptr, exp_kt_ptr);
+
+    // 标记: 如果 jb_init 为 NULL, 说明 WEAK stub 被使用
+    if (!real_jb_init) {
+        SAFE_LOG("WARNING: jb_init NOT found in dylib — using WEAK stub (IOSurface exploit disabled)");
     }
 }
 

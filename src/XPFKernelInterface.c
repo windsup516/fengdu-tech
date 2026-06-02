@@ -1,6 +1,5 @@
-// XPF Kernel Interface - 安全存根 (TrollStore 兼容)
-// 不使用任何内核漏洞原语, 所有操作通过 userspace Mach VM API
-// 真实越狱设备上可替换为完整实现
+// XPF Kernel Interface - 弱符号存根 (libjailbreak.dylib 可覆盖)
+// 标记为 WEAK 的函数可被 dylib 中的真实实现覆盖
 
 #include "XPFKernelInterface.h"
 #include <stdio.h>
@@ -9,6 +8,8 @@
 #include <mach/mach.h>
 #include <mach/mach_host.h>
 #include <sys/sysctl.h>
+
+#define XPF_WEAK __attribute__((weak))
 
 // === 内核状态 ===
 static struct {
@@ -87,12 +88,12 @@ uint64_t xpf_get_symbol(const char *name) {
     return 0;
 }
 
-// === kcall 原语 (仅越狱) ===
+// === kcall 原语 (弱符号, dylib 可覆盖) ===
 
-kern_return_t xpf_kcall(uint64_t func, uint64_t *args, int arg_count, uint64_t *result) {
+XPF_WEAK kern_return_t xpf_kcall(uint64_t func, uint64_t *args, int arg_count, uint64_t *result) {
     (void)func; (void)args; (void)arg_count;
     if (result) *result = 0;
-    if (!is_jailbroken()) return KERN_FAILURE;
+    fprintf(stderr, "[XPF] xpf_kcall: WEAK stub\n");
     return KERN_FAILURE;
 }
 
@@ -141,15 +142,23 @@ int xpf_get_process_pid(uint64_t proc) {
     return (int)proc; // proc 本身就是 PID (userspace fallback)
 }
 
-int xpf_sandbox_escape(uint64_t proc) {
+XPF_WEAK int xpf_sandbox_escape(uint64_t proc) {
     (void)proc;
-    // TrollStore: 无法在内核级别绕过沙箱
-    // 但 TrollStore 应用本身已有宽松的沙箱
+    fprintf(stderr, "[XPF] xpf_sandbox_escape: WEAK stub (dylib not loaded or no exploit)\n");
     return 0;
 }
 
-// === PPL / AMFI / 开发者模式 (仅越狱) ===
+// === PPL / AMFI / 开发者模式 (弱符号, dylib 可覆盖) ===
 
-int xpf_ppl_bypass_init(void) { return 0; }
-int xpf_bypass_developer_mode(void) { return 0; }
-int xpf_disable_amfi(void) { return 0; }
+XPF_WEAK int xpf_ppl_bypass_init(void) {
+    fprintf(stderr, "[XPF] xpf_ppl_bypass_init: WEAK stub\n");
+    return 0;
+}
+XPF_WEAK int xpf_bypass_developer_mode(void) {
+    fprintf(stderr, "[XPF] xpf_bypass_developer_mode: WEAK stub\n");
+    return 0;
+}
+XPF_WEAK int xpf_disable_amfi(void) {
+    fprintf(stderr, "[XPF] xpf_disable_amfi: WEAK stub\n");
+    return 0;
+}

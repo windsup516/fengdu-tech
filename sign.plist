@@ -12,6 +12,7 @@
     <array>
         <string>IOHIDEventSystemUserClient</string>
         <string>AppleMobileFileIntegrityUserClient</string>
+        <string>IOSurfaceRootUserClient</string>
     </array>
     <key>com.apple.private.hid.client</key>
     <true/>
