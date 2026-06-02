@@ -25,6 +25,8 @@ extern CFTypeRef SecTaskCopyValueForEntitlement(SecTaskRef task, CFStringRef ent
 #import "HUDController.h"
 #import "GameHooks.h"
 #import "XPFKernelInterface.h"
+#import "InternalAntiCheat.h"
+#import "Logging.h"
 
 // 外部函数声明 (来自 ExternalStubs.c 的 WEAK 存根)
 extern int jb_init(void);
@@ -42,52 +44,6 @@ static uint64_t (*real_physread64)(uint64_t) = NULL;
 static int (*real_physwritebuf)(uint64_t, void*, size_t) = NULL;
 static uint64_t (*real_phystokv)(uint64_t) = NULL;
 static int (*real_xpf_inject_dylib)(int, const char*) = NULL;
-
-// ====== 文件日志系统 (必须在 resolve_dylib_functions 之前) ======
-static FILE *g_logFile = NULL;
-
-static void log_to_file(const char *tag, const char *fmt, ...) {
-    if (!g_logFile) {
-        NSString *logPath = nil;
-        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        if (paths.count > 0) {
-            logPath = [paths[0] stringByAppendingPathComponent:@"debug.log"];
-        }
-        if (!logPath) {
-            logPath = @"/tmp/debug_stocks.log";
-        }
-        if (logPath) {
-            g_logFile = fopen([logPath UTF8String], "a");
-            if (g_logFile) {
-                fprintf(g_logFile, "\n=== App Launch (path=%s) ===\n", [logPath UTF8String]);
-                fflush(g_logFile);
-            }
-        }
-    }
-
-    va_list args;
-    va_start(args, fmt);
-    fprintf(stderr, "[%s] ", tag);
-    vfprintf(stderr, fmt, args);
-    fprintf(stderr, "\n");
-
-    if (g_logFile) {
-        time_t now = time(NULL);
-        struct tm *tm_info = localtime(&now);
-        char time_buf[16];
-        strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
-        fprintf(g_logFile, "%s [%s] ", time_buf, tag);
-        va_list args2;
-        va_copy(args2, args);
-        vfprintf(g_logFile, fmt, args2);
-        va_end(args2);
-        fprintf(g_logFile, "\n");
-        fflush(g_logFile);
-    }
-    va_end(args);
-}
-
-#define SAFE_LOG(fmt, ...) log_to_file("Stocks", fmt, ##__VA_ARGS__)
 
 static void resolve_dylib_functions(void) {
     char exePath[1024];
@@ -211,22 +167,16 @@ static void crash_signal_handler(int sig) {
         case SIGFPE:  name = "SIGFPE";  break;
     }
 
-    // 写入 stderr 和文件
+    // 写入 stderr 和日志文件
     fprintf(stderr, "\n!!! CRASH: signal %d (%s) !!!\n", sig, name);
-    if (g_logFile) {
-        fprintf(g_logFile, "\n!!! CRASH: signal %d (%s) !!!\n", sig, name);
-        fflush(g_logFile);
-    }
+    SAFE_LOG(@"!!! CRASH: signal %d (%s) !!!", sig, name);
 
     // 获取调用栈
     void *callstack[128];
     int frames = backtrace(callstack, 128);
-    if (g_logFile) {
-        backtrace_symbols_fd(callstack, frames, fileno(g_logFile));
-        fflush(g_logFile);
-        fclose(g_logFile);
-        g_logFile = NULL;
-    }
+    // backtrace_symbols_fd 直接写 stderr，日志记录帧数
+    backtrace_symbols_fd(callstack, frames, 2); // fd=2 = stderr
+    SAFE_LOG(@"Callstack: %d frames", frames);
 
     // 恢复默认处理器并重新触发
     signal(sig, SIG_DFL);
@@ -261,7 +211,7 @@ static void install_crash_handlers(void) {
     // 解析 dylib 真实函数 (必须在 jb_init 之前)
     resolve_dylib_functions();
 
-    SAFE_LOG("=== DeltaForce TrollKit v2.1 Starting ===");
+    SAFE_LOG("=== 风度全功能 Starting ===");
 
     // ===== 步骤1: 环境检测 (非致命) =====
     self.environmentType = 0;
@@ -288,6 +238,14 @@ static void install_crash_handlers(void) {
     int jbResult = call_jb_init();
     if (jbResult != 0) {
         SAFE_LOG("jb_init: FAILED (continuing with userspace only)");
+    }
+
+    // ===== 步骤3.5: 内防绕过 (红狼 AAyantibs, 在游戏连接前启动) =====
+    int acResult = ac_bypass_init();
+    if (acResult != 0) {
+        SAFE_LOG("Anti-cheat bypass: incomplete (continuing)");
+    } else {
+        SAFE_LOG("Anti-cheat bypass: OK");
     }
 
     // ===== 步骤4: 设置主窗口 =====

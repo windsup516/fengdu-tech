@@ -136,7 +136,7 @@
     ImGui::SetNextWindowSize(ImVec2(400, 520), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
 
-    ImGui::Begin("DeltaForce TrollKit v2.1", &_menuOpen,
+    ImGui::Begin("风度全功能", &_menuOpen,
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
 
     // Tab 栏
@@ -163,7 +163,7 @@
                        self.statusMessage.UTF8String ?: "Ready");
 
     // 提示
-    ImGui::TextDisabled("Press ESC or close window to hide menu");
+    ImGui::TextDisabled("按ESC或关闭窗口隐藏菜单");
 
     ImGui::End();
 }

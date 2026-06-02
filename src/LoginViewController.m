@@ -134,7 +134,7 @@ typedef struct {
 // 测试模式：直接授权，跳过服务器
 - (void)bypassAuthorize {
     NSLog(@"[Login] bypassAuthorize: START");
-    NSString *successText = @"授权成功，正在初始化...";
+    NSString *successText = @"授权成功，正在启动风度...";
     UIColor *tealColor = [UIColor colorWithRed:0.204 green:0.827 blue:0.600 alpha:1.0];
     [self setStatusText:successText color:tealColor];
 
@@ -298,14 +298,14 @@ typedef struct {
 
 - (void)installHero {
     UILabel *title = [[UILabel alloc] init];
-    title.text = @"三角洲行动";
+    title.text = @"风度全功能";
     title.font = [UIFont systemFontOfSize:32 weight:UIFontWeightBold];
     title.textColor = [UIColor whiteColor];
     title.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:title];
 
     UILabel *subtitle = [[UILabel alloc] init];
-    subtitle.text = @"防封辅助工具";
+    subtitle.text = @"专业三角洲行动辅助";
     subtitle.font = [UIFont systemFontOfSize:14 weight:UIFontWeightLight];
     subtitle.textColor = [UIColor colorWithRed:0.376 green:0.647 blue:0.980 alpha:1.0];
     subtitle.translatesAutoresizingMaskIntoConstraints = NO;

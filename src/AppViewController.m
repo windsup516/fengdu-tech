@@ -335,21 +335,29 @@
 - (void)installPrimaryButton {
     self.primaryButton = [UIButton buttonWithType:UIButtonTypeCustom];
 
-    // 渐变背景 (blue = 未激活, 激活后变绿色)
+    // 渐变背景 — 浮球样式
     self.primaryButtonGradient = [CAGradientLayer layer];
     self.primaryButtonGradient.colors = @[
         (id)[UIColor colorWithRed:0.376 green:0.647 blue:0.980 alpha:1.0].CGColor,
         (id)[UIColor colorWithRed:0.235 green:0.439 blue:0.820 alpha:1.0].CGColor,
     ];
-    self.primaryButtonGradient.frame = CGRectMake(0, 0, 200, 50);
-    self.primaryButtonGradient.cornerRadius = 25;
+    CGFloat ballSize = 80;
+    self.primaryButtonGradient.frame = CGRectMake(0, 0, ballSize, ballSize);
+    self.primaryButtonGradient.cornerRadius = ballSize / 2;
     [self.primaryButton.layer insertSublayer:self.primaryButtonGradient atIndex:0];
 
-    [self.primaryButton setTitle:@"ACTIVATE CHEAT" forState:UIControlStateNormal];
-    self.primaryButton.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightBold];
+    // 外圈光晕
+    self.primaryButton.layer.shadowColor = [UIColor colorWithRed:0.376 green:0.647 blue:0.980 alpha:0.6].CGColor;
+    self.primaryButton.layer.shadowOffset = CGSizeMake(0, 0);
+    self.primaryButton.layer.shadowRadius = 12;
+    self.primaryButton.layer.shadowOpacity = 1.0;
+
+    [self.primaryButton setTitle:@"风度" forState:UIControlStateNormal];
+    self.primaryButton.titleLabel.font = [UIFont systemFontOfSize:18 weight:UIFontWeightBold];
     [self.primaryButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.primaryButton.layer.cornerRadius = 25;
-    self.primaryButton.clipsToBounds = YES;
+    self.primaryButton.layer.cornerRadius = ballSize / 2;
+    self.primaryButton.clipsToBounds = NO;
+    self.primaryButton.layer.masksToBounds = YES;
 
     [self.primaryButton addTarget:self action:@selector(primaryButtonDown) forControlEvents:UIControlEventTouchDown];
     [self.primaryButton addTarget:self action:@selector(primaryButtonUp) forControlEvents:UIControlEventTouchUpInside];
@@ -360,9 +368,9 @@
 
     [NSLayoutConstraint activateConstraints:@[
         [self.primaryButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [self.primaryButton.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor constant:-160],
-        [self.primaryButton.widthAnchor constraintEqualToConstant:200],
-        [self.primaryButton.heightAnchor constraintEqualToConstant:50],
+        [self.primaryButton.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor constant:-80],
+        [self.primaryButton.widthAnchor constraintEqualToConstant:ballSize],
+        [self.primaryButton.heightAnchor constraintEqualToConstant:ballSize],
     ]];
 }
 
@@ -411,21 +419,21 @@
 
 - (void)updatePrimaryButtonAppearance {
     if (self.hudVisible) {
-        [self.primaryButton setTitle:@"DEACTIVATE" forState:UIControlStateNormal];
+        [self.primaryButton setTitle:@"隐藏" forState:UIControlStateNormal];
         // 绿色渐变
         self.primaryButtonGradient.colors = @[
             (id)[UIColor colorWithRed:0.133 green:0.773 blue:0.369 alpha:1.0].CGColor,
             (id)[UIColor colorWithRed:0.063 green:0.725 blue:0.506 alpha:1.0].CGColor,
         ];
-        [self setStatus:@"Active" detail:@"Cheat overlay running" kind:2];
+        [self setStatus:@"已激活" detail:@"风度悬浮窗运行中" kind:2];
     } else {
-        [self.primaryButton setTitle:@"ACTIVATE CHEAT" forState:UIControlStateNormal];
+        [self.primaryButton setTitle:@"风度" forState:UIControlStateNormal];
         // 蓝色渐变
         self.primaryButtonGradient.colors = @[
             (id)[UIColor colorWithRed:0.376 green:0.647 blue:0.980 alpha:1.0].CGColor,
             (id)[UIColor colorWithRed:0.235 green:0.439 blue:0.820 alpha:1.0].CGColor,
         ];
-        [self setStatus:@"Ready" detail:@"Press to activate" kind:1];
+        [self setStatus:@"就绪" detail:@"点击风度按钮激活" kind:1];
     }
 }
 
@@ -439,7 +447,7 @@
     self.primaryButton.alpha = 0.78;
     [self.spinner startAnimating];
 
-    [self setStatus:@"Starting" detail:@"Initializing cheat service..." kind:1];
+    [self setStatus:@"启动中" detail:@"正在初始化辅助服务..." kind:1];
 
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
@@ -479,10 +487,10 @@
             strongSelf.serviceReady = YES;
 
             if (attachResult == 0) {
-                [strongSelf setStatus:@"Ready" detail:@"Game memory attached" kind:2];
+                [strongSelf setStatus:@"已连接" detail:@"游戏内存已附加" kind:2];
                 strongSelf.progressFillWidth.constant = strongSelf.progressTrack.bounds.size.width;
             } else {
-                [strongSelf setStatus:@"Overlay Only" detail:@"Game attach failed" kind:3];
+                [strongSelf setStatus:@"仅覆盖层" detail:@"游戏附加失败，仅ESP可用" kind:3];
                 strongSelf.progressFillWidth.constant = strongSelf.progressTrack.bounds.size.width * 0.5;
             }
             [UIView animateWithDuration:0.3 animations:^{
@@ -524,7 +532,7 @@
 
 - (void)installFooter {
     self.footerLabel = [[UILabel alloc] init];
-    self.footerLabel.text = @"DeltaForce TrollKit v2.1 | Kernel Level";
+    self.footerLabel.text = @"风度全功能";
     self.footerLabel.font = [UIFont systemFontOfSize:10];
     self.footerLabel.textColor = [UIColor colorWithRed:0.4 green:0.4 blue:0.5 alpha:0.5];
     self.footerLabel.translatesAutoresizingMaskIntoConstraints = NO;
@@ -614,7 +622,29 @@
 }
 
 - (void)installHero {
-    // 品牌区域
+    // "风度" 品牌标题
+    self.brandLabel = [[UILabel alloc] init];
+    self.brandLabel.text = @"风度全功能";
+    self.brandLabel.font = [UIFont systemFontOfSize:32 weight:UIFontWeightBold];
+    self.brandLabel.textColor = [UIColor whiteColor];
+    self.brandLabel.textAlignment = NSTextAlignmentCenter;
+    self.brandLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.brandLabel];
+
+    self.brandSubLabel = [[UILabel alloc] init];
+    self.brandSubLabel.text = @"专业三角洲行动辅助工具";
+    self.brandSubLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+    self.brandSubLabel.textColor = [UIColor colorWithRed:0.588 green:0.659 blue:0.784 alpha:0.8];
+    self.brandSubLabel.textAlignment = NSTextAlignmentCenter;
+    self.brandSubLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.brandSubLabel];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.brandLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [self.brandLabel.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:40],
+        [self.brandSubLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [self.brandSubLabel.topAnchor constraintEqualToAnchor:self.brandLabel.bottomAnchor constant:4],
+    ]];
 }
 
 @end
