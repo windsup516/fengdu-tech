@@ -9,7 +9,15 @@
 #ifdef __OBJC__
 #import <Foundation/Foundation.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void central_log(const char *tag, NSString *fmt, ...) NS_FORMAT_FUNCTION(2, 3);
+
+#ifdef __cplusplus
+}
+#endif
 
 // Per-module convenience macros
 #define SAFE_LOG(fmt, ...)    central_log("风度", fmt, ##__VA_ARGS__)
