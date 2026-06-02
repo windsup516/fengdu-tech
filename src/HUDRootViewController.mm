@@ -145,7 +145,7 @@ static BOOL g_imGuiInitialized = NO;
     if (!ImGui::GetCurrentContext()) return;
 
     static int frameCount = 0;
-    if (++frameCount == 1 || frameCount % 300 == 0) {
+    if (++frameCount <= 10 || frameCount % 300 == 0) {
         HUD_LOG(@"ChangeUI rendering frame #%d", frameCount);
     }
 

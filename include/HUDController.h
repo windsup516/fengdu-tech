@@ -12,6 +12,7 @@
 @property (nonatomic, strong) HUDRootViewController *rootVC;
 @property (nonatomic, strong) TouchViewController *touchVC;
 @property (nonatomic, strong) id hostingController;
+@property (nonatomic, strong) NSTimer *sbsRetryTimer;
 @property (nonatomic) BOOL showing;
 @property (nonatomic) BOOL windowsCreated;
 

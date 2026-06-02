@@ -197,37 +197,42 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
 }
 
 - (void)setupBackgroundKeepAlive {
-    // SBS 托管不可用时的备选方案:
-    // 使用后台任务 + 定期刷新窗口，尽可能保持窗口可见
     __weak typeof(self) weakSelf = self;
+
+    // 退后台: 只保窗口属性，绝不调 makeKeyAndVisible（会触发 render server 回收 contextId）
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillResignActiveNotification
                                                        object:nil
                                                         queue:[NSOperationQueue mainQueue]
                                                    usingBlock:^(NSNotification *note) {
-        HUD_LOG(@"App will resign active — forcing window refresh");
-        // 延迟重新显示窗口 (等系统完成后台过渡)
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            weakSelf.hudWindow.hidden = NO;
-            weakSelf.touchWindow.hidden = NO;
-            [weakSelf.hudWindow makeKeyAndVisible];
-            [weakSelf.touchWindow makeKeyAndVisible];
-            weakSelf.hudWindow.windowLevel = 10000010.0;
-            weakSelf.touchWindow.windowLevel = 10000011.0;
-            HUD_LOG(@"Windows forced visible after background transition");
-        });
+        HUD_LOG(@"App will resign active — preserving window state (NO makeKeyAndVisible)");
+        // 只设 hidden + level, makeKeyAndVisible 会杀死 contextId
+        weakSelf.hudWindow.hidden = NO;
+        weakSelf.touchWindow.hidden = NO;
+        weakSelf.hudWindow.windowLevel = 10000010.0;
+        weakSelf.touchWindow.windowLevel = 10000011.0;
     }];
 
-    // 监听回到前台
+    // 回到前台: 检查 contextId 恢复情况
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                        object:nil
                                                         queue:[NSOperationQueue mainQueue]
                                                    usingBlock:^(NSNotification *note) {
-        if (weakSelf.showing) {
-            weakSelf.hudWindow.hidden = NO;
-            weakSelf.touchWindow.hidden = NO;
-            weakSelf.hudWindow.windowLevel = 10000010.0;
-            weakSelf.touchWindow.windowLevel = 10000011.0;
-            HUD_LOG(@"Windows restored on become active");
+        if (!weakSelf.showing) return;
+        weakSelf.hudWindow.hidden = NO;
+        weakSelf.touchWindow.hidden = NO;
+        weakSelf.hudWindow.windowLevel = 10000010.0;
+        weakSelf.touchWindow.windowLevel = 10000011.0;
+
+        // 回到前台后验证 contextId，如果恢复了就重新注册 SBS
+        unsigned int hudCtx = 0, touchCtx = 0;
+        if (weakSelf.hudWindow && [weakSelf.hudWindow respondsToSelector:@selector(_contextId)])
+            hudCtx = (unsigned int)[weakSelf.hudWindow _contextId];
+        if (weakSelf.touchWindow && [weakSelf.touchWindow respondsToSelector:@selector(_contextId)])
+            touchCtx = (unsigned int)[weakSelf.touchWindow _contextId];
+
+        HUD_LOG(@"Become active: hudCtx=%u touchCtx=%u", hudCtx, touchCtx);
+        if (hudCtx != 0 && touchCtx != 0) {
+            [weakSelf reRegisterSBSHosting];
         }
     }];
 }
@@ -240,15 +245,14 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
 }
 
 - (void)reRegisterSBSHosting {
-    // 在游戏启动后重新注册 SBS 托管
-    // SBS 注册可能在 app 切后台时被清除，需要在游戏活跃时重新注册
+    // 确保 hosting controller 存在
     if (!self.hostingController) {
-        HUD_LOG(@"reRegisterSBS: no hosting controller, re-initializing...");
+        HUD_LOG(@"reRegisterSBS: no hosting controller, initializing...");
         [self setupHostingController];
         return;
     }
 
-    // 检查 contextId 是否还有效
+    // 获取当前 contextId
     unsigned int hudCtx = 0, touchCtx = 0;
     if (self.hudWindow && [self.hudWindow respondsToSelector:@selector(_contextId)]) {
         hudCtx = (unsigned int)[self.hudWindow _contextId];
@@ -258,40 +262,52 @@ static const uint8_t xorKeySelectorPart3       = 0x85;
     }
 
     if (hudCtx == 0 || touchCtx == 0) {
-        HUD_LOG(@"reRegisterSBS: contextId lost (hud=%u touch=%u), recreating windows...", hudCtx, touchCtx);
+        // contextId 丢失 — 后台状态重建窗口拿不到新 context，不重建，改为定时重试
+        HUD_LOG(@"reRegisterSBS: contextId lost (hud=%u touch=%u) — scheduling retry, NOT recreating", hudCtx, touchCtx);
 
-        // 销毁旧窗口
-        self.hudWindow.hidden = YES;
-        self.touchWindow.hidden = YES;
-        self.hudWindow = nil;
-        self.touchWindow = nil;
-        self.hostingController = nil;
-        self.windowsCreated = NO;
+        // 取消之前的重试定时器
+        [self.sbsRetryTimer invalidate];
+        self.sbsRetryTimer = nil;
 
-        // 重新获取 scene
-        id scene = [UIApplication sharedApplication].connectedScenes.anyObject;
-        if (scene) {
-            [self createWindowsOnScene:scene];
-            if (self.windowsCreated) {
-                [self show];
-                HUD_LOG(@"reRegisterSBS: windows recreated OK");
-            } else {
-                HUD_LOG(@"reRegisterSBS: window recreation FAILED");
+        // 每 3 秒重试一次，最多 10 次 (30秒)
+        __weak typeof(self) weakSelf = self;
+        __block int retryCount = 0;
+        self.sbsRetryTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer *timer) {
+            retryCount++;
+            unsigned int hc = 0, tc = 0;
+            if (weakSelf.hudWindow && [weakSelf.hudWindow respondsToSelector:@selector(_contextId)])
+                hc = (unsigned int)[weakSelf.hudWindow _contextId];
+            if (weakSelf.touchWindow && [weakSelf.touchWindow respondsToSelector:@selector(_contextId)])
+                tc = (unsigned int)[weakSelf.touchWindow _contextId];
+
+            HUD_LOG(@"SBS retry #%d: hudCtx=%u touchCtx=%u", retryCount, hc, tc);
+
+            if (hc != 0 && tc != 0) {
+                HUD_LOG(@"SBS contextId recovered after %d retries — registering", retryCount);
+                [timer invalidate];
+                weakSelf.sbsRetryTimer = nil;
+                if (weakSelf.hudWindow) attachWindowToHostingController(weakSelf.hudWindow, weakSelf.hostingController);
+                if (weakSelf.touchWindow) attachWindowToHostingController(weakSelf.touchWindow, weakSelf.hostingController);
+                return;
             }
-        } else {
-            HUD_LOG(@"reRegisterSBS: no connected scene, cannot recreate");
-        }
+
+            if (retryCount >= 10) {
+                HUD_LOG(@"SBS retry exhausted (%d attempts) — contextId never recovered", retryCount);
+                [timer invalidate];
+                weakSelf.sbsRetryTimer = nil;
+            }
+        }];
         return;
     }
 
-    HUD_LOG(@"reRegisterSBS: re-registering both windows...");
+    // contextId 有效 — 直接重注册
+    HUD_LOG(@"reRegisterSBS: contextId valid (hud=%u touch=%u), re-registering...", hudCtx, touchCtx);
     if (self.hudWindow) {
         attachWindowToHostingController(self.hudWindow, self.hostingController);
     }
     if (self.touchWindow) {
         attachWindowToHostingController(self.touchWindow, self.hostingController);
     }
-    HUD_LOG(@"reRegisterSBS: done");
 }
 
 - (void)show {
