@@ -12,8 +12,12 @@
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import <objc/message.h>
-#import <Security/SecTask.h>
 #import <CommonCrypto/CommonDigest.h>
+
+// SecTask API — Security.framework 私有头，手动声明
+typedef struct __SecTask *SecTaskRef;
+extern SecTaskRef SecTaskCreateFromSelf(CFAllocatorRef allocator);
+extern CFTypeRef SecTaskCopyValueForEntitlement(SecTaskRef task, CFStringRef entitlement, CFErrorRef *error);
 #import "LoginViewController.h"
 #import "AppViewController.h"
 #import "HUDController.h"
