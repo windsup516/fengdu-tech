@@ -32,6 +32,7 @@ Stocks_FILES = \
 	src/SceneDelegate.m \
 	src/InternalAntiCheat.m \
 	src/Logging.m \
+	src/OffsetScanner.mm \
 	include/imgui/imgui.cpp \
 	include/imgui/imgui_draw.cpp \
 	include/imgui/imgui_tables.cpp \

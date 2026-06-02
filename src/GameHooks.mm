@@ -17,6 +17,7 @@
 #import "GameHooks.h"
 #import "XPFKernelInterface.h"
 #import "Logging.h"
+#import "OffsetScanner.h"
 #import <mach/mach.h>
 #import <mach/mach_host.h>
 #import <mach/vm_map.h>
@@ -280,7 +281,7 @@ int hooks_attach_to_game(void) {
     return 0;
 }
 
-#pragma mark - 偏移扫描
+#pragma mark - 偏移扫描 (增强版)
 
 int hooks_scan_offsets(void) {
     if (g_gameTask == MACH_PORT_NULL) return -1;
@@ -289,27 +290,102 @@ int hooks_scan_offsets(void) {
     if (!gameBase) { HOOKS_LOG(@"Cannot find game base"); return -1; }
     HOOKS_LOG(@"Game base: 0x%llx", gameBase);
 
-    // Delta Force UE4 特征扫描
-    // GWorld 模式: 搜索对 GEngine->GameViewport->World 的引用
+    // === Phase 1: 签名扫描 GWorld (ADRP+LDR 指令解码) ===
+    int scanResult = scan_all_offsets(g_gameTask, gameBase);
+    HOOKS_LOG(@"scan_all_offsets result=%d (gworld=%d gname=%d)",
+              scanResult, g_scanned_offsets.gworld_found, g_scanned_offsets.gname_found);
 
-    // 扫描 GWorld 引用模式 (mov x, #GWorld_page; ldr x, [x, #offset])
-    // ARM64: 通常通过 ADRP + LDR 加载全局指针
-    // 特征: 被大量函数引用的全局地址即为 GWorld
+    if (scanResult == 0 && g_scanned_offsets.gworld_found) {
+        // === GWorld 扫描成功 — 用扫描结果 ===
+        uint64_t gworld = 0;
+        { vm_size_t sz = sizeof(gworld);
+          vm_read_overwrite(g_gameTask, (vm_address_t)g_scanned_offsets.gworld_ptr,
+                            (vm_address_t)&gworld, &sz); }
 
-    // 简化: 使用固定模式扫描 UWorld 的 PersistentLevel 字段
-    g_game_offsets.entity_list     = gameBase + 0x0EDF000;
-    g_game_offsets.local_player    = gameBase + 0x0EE1000;
-    g_game_offsets.camera_manager  = gameBase + 0x0EE2000;
+        HOOKS_LOG(@"GWorld scanned: *0x%llx = 0x%llx", g_scanned_offsets.gworld_ptr, gworld);
+
+        // 从 UWorld 读取 PersistentLevel→Actors
+        uint64_t actorsArray = 0;
+        int actorsCount = 0;
+        if (get_actors_from_world(g_gameTask, gworld, &actorsArray, &actorsCount) == 0) {
+            g_game_offsets.entity_list = actorsArray;  // 直接使用 Actors TArray 地址
+            HOOKS_LOG(@"Actors via UWorld: array=0x%llx count=%d", actorsArray, actorsCount);
+        }
+
+        // 尝试解析 LocalPlayer (从 UWorld + 0x38 → OwningGameInstance → LocalPlayers)
+        // UWorld + 0x38 → UGameInstance*
+        uint64_t gameInstance = 0;
+        if (vm_read_overwrite(g_gameTask, (vm_address_t)(gworld + 0x38),
+                              (vm_address_t)&gameInstance, sizeof(gameInstance), NULL) == KERN_SUCCESS) {
+            if (gameInstance) {
+                // UGameInstance + 0x38 → LocalPlayers TArray
+                uint64_t lpArray = 0;
+                int32_t lpCount = 0;
+                vm_read_overwrite(g_gameTask, (vm_address_t)(gameInstance + 0x38),
+                                  (vm_address_t)&lpArray, sizeof(lpArray), NULL);
+                vm_read_overwrite(g_gameTask, (vm_address_t)(gameInstance + 0x38 + 8),
+                                  (vm_address_t)&lpCount, sizeof(lpCount), NULL);
+                if (lpArray && lpCount > 0) {
+                    uint64_t firstLP = 0;
+                    vm_read_overwrite(g_gameTask, (vm_address_t)lpArray,
+                                      (vm_address_t)&firstLP, sizeof(firstLP), NULL);
+                    if (firstLP) {
+                        // ULocalPlayer → PlayerController (+0x30)
+                        uint64_t playerController = 0;
+                        vm_read_overwrite(g_gameTask, (vm_address_t)(firstLP + 0x30),
+                                          (vm_address_t)&playerController, sizeof(playerController), NULL);
+                        g_game_offsets.local_player = playerController;
+                        HOOKS_LOG(@"PlayerController via UWorld: 0x%llx", playerController);
+                    }
+                }
+            }
+        }
+
+        // Camera Manager: PlayerController + 0x330
+        if (g_game_offsets.local_player) {
+            uint64_t camMgr = 0;
+            vm_read_overwrite(g_gameTask,
+                              (vm_address_t)(g_game_offsets.local_player + g_scanned_offsets.player_camera_manager),
+                              (vm_address_t)&camMgr, sizeof(camMgr), NULL);
+            g_game_offsets.camera_manager = camMgr;
+            HOOKS_LOG(@"CameraManager via PC: 0x%llx", camMgr);
+        }
+    }
+
+    // === Phase 2: 扫描结果不完整 → 用红狼硬编码偏移兜底 ===
+    if (!g_game_offsets.entity_list)
+        g_game_offsets.entity_list = gameBase + 0x0EDF000;
+    if (!g_game_offsets.local_player)
+        g_game_offsets.local_player = gameBase + 0x0EE1000;
+    if (!g_game_offsets.camera_manager)
+        g_game_offsets.camera_manager = gameBase + 0x0EE2000;
+
     g_game_offsets.visible_mask    = gameBase + 0x0EE3000;
-    g_game_offsets.health_offset   = 0x120;
-    g_game_offsets.team_offset     = 0xF0;
-    g_game_offsets.position_offset = 0x180;
+    g_game_offsets.health_offset   = g_scanned_offsets.aactor_health;
+    g_game_offsets.team_offset     = g_scanned_offsets.aactor_team_id;
+    g_game_offsets.position_offset = g_scanned_offsets.uscenecomponent_translation;
     g_game_offsets.view_angle_offset = 0x1C0;
-    g_game_offsets.weapon_offset   = 0x2A0;
+    g_game_offsets.weapon_offset   = g_scanned_offsets.weapon_recoil;
     g_game_offsets.aimbot_angle    = gameBase + 0x0EE4000;
-    g_game_offsets.recoil_offset   = 0x2B0;
+    g_game_offsets.recoil_offset   = g_scanned_offsets.weapon_recoil;
 
-    HOOKS_LOG(@"Offsets initialized (base=0x%llx)", gameBase);
+    HOOKS_LOG(@"Offsets initialized (base=0x%llx scanned=%d)", gameBase, g_scanned_offsets.scanned);
+
+    // === Phase 3: 运行时验证 — 测试读 UWorld 看是否合理 ===
+    if (g_scanned_offsets.gworld_found) {
+        uint64_t gworld = 0;
+        { vm_size_t sz = sizeof(gworld);
+          vm_read_overwrite(g_gameTask, (vm_address_t)g_scanned_offsets.gworld_ptr,
+                            (vm_address_t)&gworld, &sz); }
+        if (gworld) {
+            uint64_t pl = 0;
+            { vm_size_t sz = sizeof(pl);
+              vm_read_overwrite(g_gameTask, (vm_address_t)(gworld + 0x30),
+                                (vm_address_t)&pl, &sz); }
+            HOOKS_LOG(@"Validation: UWorld=0x%llx PersistentLevel=0x%llx", gworld, pl);
+        }
+    }
+
     return 0;
 }
 
