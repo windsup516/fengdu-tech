@@ -16,29 +16,9 @@ static int strip_macho_signature(const char *path) {
 
     uint32_t magic;
     if (fread(&magic, sizeof(magic), 1, f) != 1) { fclose(f); return -1; }
-
-    // Handle FAT binary (shouldn't happen for our thin dylib, but be safe)
-    uint32_t narch = 0;
-    if (magic == FAT_MAGIC || magic == FAT_CIGAM) {
-        if (magic == FAT_CIGAM) magic = FAT_MAGIC; // Big-endian FAT not supported
-        if (fread(&narch, sizeof(narch), 1, f) != 1) { fclose(f); return -1; }
-        if (narch > 4) { fclose(f); return -1; }
-        // Read first arch offset
-        struct { uint32_t cputype, cpusubtype; uint32_t offset, size, align; } arch;
-        int found_arm64 = 0;
-        for (uint32_t i = 0; i < narch; i++) {
-            if (fread(&arch, sizeof(arch), 1, f) != 1) { fclose(f); return -1; }
-            if (arch.cputype == CPU_TYPE_ARM64) { found_arm64 = 1; break; }
-        }
-        if (!found_arm64) { fclose(f); return -1; }
-        fseek(f, arch.offset, SEEK_SET);
-        if (fread(&magic, sizeof(magic), 1, f) != 1) { fclose(f); return -1; }
-    }
-
-    if (magic != MH_MAGIC_64) { fclose(f); return -1; }
+    if (magic != MH_MAGIC_64) { fclose(f); return -1; } // Thin arm64 only
 
     struct mach_header_64 hdr;
-    // magic is already consumed (4 bytes) — read remaining header fields
     fread(&hdr.cputype, sizeof(hdr.cputype), 1, f);
     fread(&hdr.cpusubtype, sizeof(hdr.cpusubtype), 1, f);
     fread(&hdr.filetype, sizeof(hdr.filetype), 1, f);
