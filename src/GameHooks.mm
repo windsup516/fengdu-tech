@@ -288,17 +288,20 @@ extern "C" int inject_dylib_to_pid(pid_t pid, const char *dylibName);
 
 int hooks_inject_overlay_dylib(void) {
     if (!g_attached || g_gamePid <= 0) {
-        HOOKS_LOG(@"Inject: game not attached, can't inject");
+        HOOKS_LOG(@"!!!!!!!! INJECT BLOCKED: game not attached (attached=%d pid=%d) !!!!!!!!",
+                  g_attached, g_gamePid);
         return -1;
     }
 
-    // Check if dylib already injected (check for DFOverlayController in remote process)
-    // For now, just inject — if already loaded, dlopen is a no-op
+    HOOKS_LOG(@"========================================");
+    HOOKS_LOG(@">> INJECTING DFOverlay.dylib -> PID %d <<", g_gamePid);
+    HOOKS_LOG(@"========================================");
+
     int ret = inject_dylib_to_pid(g_gamePid, "DFOverlay.dylib");
     if (ret == 0) {
-        HOOKS_LOG(@"Inject: DFOverlay.dylib loaded into game PID %d", g_gamePid);
+        HOOKS_LOG(@">>> DFOverlay.dylib INJECTED OK — check /tmp/dfoverlay.log in game <<<");
     } else {
-        HOOKS_LOG(@"Inject: FAILED to inject DFOverlay.dylib (ret=%d)", ret);
+        HOOKS_LOG(@">>> INJECTION FAILED (ret=%d) — overlay will NOT appear <<<", ret);
     }
 
     return ret;

@@ -28,19 +28,19 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     // Step 1: Get task port
     kr = task_for_pid(mach_task_self(), pid, &remoteTask);
     if (kr != KERN_SUCCESS) {
-        SAFE_LOG(@"Inject: task_for_pid(%d) failed: %s", pid, mach_error_string(kr));
+        SAFE_LOG(@">> task_for_pid(%d) FAILED: %s", pid, mach_error_string(kr));
         return kr;
     }
-    SAFE_LOG(@"Inject: task_for_pid(%d) OK", pid);
+    SAFE_LOG(@">> task_for_pid(%d) OK, task_port=0x%x", pid, remoteTask);
 
     // Step 2: Find dlopen in dyld_shared_cache (same address in all processes)
     void *dlopenPtr = dlsym(RTLD_DEFAULT, "dlopen");
     if (!dlopenPtr) {
-        SAFE_LOG(@"Inject: dlsym(dlopen) failed");
+        SAFE_LOG(@">> dlsym(dlopen) FAILED");
         mach_port_deallocate(mach_task_self(), remoteTask);
         return KERN_FAILURE;
     }
-    SAFE_LOG(@"Inject: dlopen @ %p", dlopenPtr);
+    SAFE_LOG(@">> dlopen @ %p", dlopenPtr);
 
     // Step 3: Allocate remote memory for dylib path + stack
     size_t pathLen = strlen(dylibPath) + 1;
@@ -48,10 +48,11 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
 
     kr = mach_vm_allocate(remoteTask, &remoteBase, allocSize, VM_FLAGS_ANYWHERE);
     if (kr != KERN_SUCCESS) {
-        SAFE_LOG(@"Inject: vm_allocate failed: %s", mach_error_string(kr));
+        SAFE_LOG(@">> vm_allocate FAILED: %s", mach_error_string(kr));
         mach_port_deallocate(mach_task_self(), remoteTask);
         return kr;
     }
+    SAFE_LOG(@">> remote mem @ 0x%llx (%zu bytes)", remoteBase, allocSize);
 
     // Step 4: Write dylib path
     kr = mach_vm_write(remoteTask, remoteBase,
@@ -152,7 +153,7 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
         goto cleanup;
     }
 
-    SAFE_LOG(@"Inject: remote thread created OK, dylib loading...");
+    SAFE_LOG(@">> remote thread RUNNING — dlopen(%s) executing in game", dylibPath);
     mach_port_deallocate(mach_task_self(), remoteThread);
     mach_port_deallocate(mach_task_self(), remoteTask);
     return KERN_SUCCESS;
@@ -165,7 +166,7 @@ cleanup:
 
 // === Public API ===
 int inject_dylib_to_pid(pid_t pid, const char *dylibName) {
-    SAFE_LOG(@"=== Inject: %s -> PID %d ===", dylibName, pid);
+    SAFE_LOG(@">> inject_dylib_to_pid: %s -> PID %d", dylibName, pid);
 
     // Resolve dylib path
     NSString *fwPath = [[[NSBundle mainBundle] bundlePath]
@@ -177,32 +178,34 @@ int inject_dylib_to_pid(pid_t pid, const char *dylibName) {
     }
 
     if (![[NSFileManager defaultManager] fileExistsAtPath:fwPath]) {
-        SAFE_LOG(@"Inject: dylib file not found: %s", [fwPath UTF8String]);
+        SAFE_LOG(@">> INJECT FAIL: dylib file not found at %s", [fwPath UTF8String]);
         return -1;
     }
 
     const char *path = [fwPath UTF8String];
-    SAFE_LOG(@"Inject: dylib path = %s", path);
+    SAFE_LOG(@">> dylib path: %s", path);
 
-    // Method 1: Try xpf_inject_dylib from libjailbreak (kernel approach, more reliable)
+    // Method 1: Try xpf_inject_dylib from libjailbreak
     typedef int (*xpf_inject_func)(int, const char*);
     xpf_inject_func xpf_inject = (xpf_inject_func)dlsym(RTLD_DEFAULT, "xpf_inject_dylib");
     if (xpf_inject) {
         int ret = xpf_inject(pid, path);
         if (ret == 0) {
-            SAFE_LOG(@"Inject: xpf_inject_dylib OK");
+            SAFE_LOG(@">> xpf_inject_dylib OK");
             return 0;
         }
-        SAFE_LOG(@"Inject: xpf_inject_dylib returned %d, falling back to Mach VM", ret);
+        SAFE_LOG(@">> xpf_inject_dylib returned %d, trying Mach VM...", ret);
+    } else {
+        SAFE_LOG(@">> xpf_inject_dylib not available, using Mach VM");
     }
 
     // Method 2: Mach VM injection
     kern_return_t kr = inject_via_mach(pid, path);
     if (kr == KERN_SUCCESS) {
-        SAFE_LOG(@"Inject: Mach VM injection OK");
+        SAFE_LOG(@">> Mach VM injection OK — dylib constructor should fire now");
         return 0;
     }
 
-    SAFE_LOG(@"Inject: FAILED (kr=%d: %s)", kr, mach_error_string(kr));
+    SAFE_LOG(@">> ALL INJECTION METHODS FAILED (kr=%d: %s)", kr, mach_error_string(kr));
     return -1;
 }

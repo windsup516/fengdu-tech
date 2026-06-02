@@ -336,8 +336,7 @@ static BOOL find_segments(mach_port_t task, uint64_t gameBase,
         return NO;
     }
 
-    HOOKS_LOG(@"Mach-O: ncmds=%u sizeofcmds=%u cputype=%u filetype=%u",
-              mh.ncmds, mh.sizeofcmds, mh.cputype, mh.filetype);
+    // Mach-O header parsed
 
     *out_text_start = 0;
     *out_text_end = 0;
@@ -358,8 +357,7 @@ static BOOL find_segments(mach_port_t task, uint64_t gameBase,
             if (!has_slide && strcmp(seg.segname, "__TEXT") == 0) {
                 slide = (int64_t)(gameBase - seg.vmaddr);
                 has_slide = YES;
-                HOOKS_LOG(@"ASLR slide: 0x%llx (base=0x%llx vmaddr=0x%llx)",
-                          slide, gameBase, seg.vmaddr);
+                // ASLR slide calculated silently
             }
 
             uint64_t seg_start = seg.vmaddr + slide;
@@ -368,16 +366,14 @@ static BOOL find_segments(mach_port_t task, uint64_t gameBase,
             if (strcmp(seg.segname, "__TEXT") == 0) {
                 *out_text_start = seg_start;
                 *out_text_end = seg_end;
-                HOOKS_LOG(@"Segment __TEXT: 0x%llx-0x%llx (vmsize=0x%llx)",
-                          seg_start, seg_end, seg.vmsize);
+                // __TEXT segment found
             } else if (strcmp(seg.segname, "__DATA_CONST") == 0 ||
                        strcmp(seg.segname, "__AUTH_CONST") == 0) {
                 // 只读常量段: 包含 C++ vtables + GOT entries
                 if (*out_const_count < max_const && seg.vmsize > 0) {
                     out_const_starts[*out_const_count] = seg_start;
                     out_const_ends[*out_const_count] = seg_end;
-                    HOOKS_LOG(@"Segment %s (const): 0x%llx-0x%llx (vmsize=0x%llx)",
-                              seg.segname, seg_start, seg_end, seg.vmsize);
+                    // const segment registered
                     (*out_const_count)++;
                 }
             } else if (strcmp(seg.segname, "__DATA") == 0 ||
@@ -387,8 +383,7 @@ static BOOL find_segments(mach_port_t task, uint64_t gameBase,
                 if (*out_data_count < max_data && seg.vmsize > 0) {
                     out_data_starts[*out_data_count] = seg_start;
                     out_data_ends[*out_data_count] = seg_end;
-                    HOOKS_LOG(@"Segment %s (writable): 0x%llx-0x%llx (vmsize=0x%llx)",
-                              seg.segname, seg_start, seg_end, seg.vmsize);
+                    // writable segment registered
                     (*out_data_count)++;
                 }
             }
@@ -430,8 +425,7 @@ static uint64_t scan_gworld_in_data(mach_port_t task, uint64_t text_start, uint6
 
         if (seg_size < 8 || seg_size > 0x10000000) continue;
 
-        HOOKS_LOG(@"Scanning writable region %d: 0x%llx-0x%llx (%.1fMB)",
-                  d, seg_start, seg_end, seg_size / 1048576.0);
+        // region scan silent — summary at end
 
         size_t buf_size = 0x10000;
         uint64_t *buf = (uint64_t *)malloc(buf_size);
@@ -491,8 +485,7 @@ static uint64_t scan_gworld_in_data(mach_port_t task, uint64_t text_start, uint6
                 uint64_t gworld_addr = addr + i * 8;
 
                 if (candidates_checked <= 5 || score > best_score) {
-                    HOOKS_LOG(@"GWorld candidate #%d: addr=0x%llx actors=%d",
-                              candidates_checked, gworld_addr, actors_count);
+                    // candidate tracking silent
                 }
 
                 if (score > best_score) {
