@@ -2,29 +2,35 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- === 核心：task 权限 + 沙盒逃逸 (Amazon2 已验证) === -->
+	<!-- === 基础调试权限 (原始 15, 已验证不会崩) === -->
 	<key>get-task-allow</key>
 	<true/>
 	<key>task_for_pid-allow</key>
 	<true/>
-	<key>platform-application</key>
+	<key>com.apple.system-task-ports</key>
 	<true/>
-	<key>proc_info-allow</key>
+	<key>com.apple.security.cs.debugger</key>
 	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.private.skip-library-validation</key>
+	<true/>
+	<key>com.apple.private.memorystatus</key>
+	<true/>
+
+	<!-- === 沙盒逃逸 (task_for_pid kr=5 的根因修复) === -->
 	<key>com.apple.private.security.no-sandbox</key>
 	<true/>
 	<key>com.apple.private.security.no-container</key>
 	<true/>
-	<key>com.apple.security.exception.mach-lookup.global-name</key>
-	<array>
-		<string>com.apple.springboard</string>
-		<string>com.apple.backboard</string>
-		<string>com.apple.frontboard</string>
-	</array>
-
-	<!-- === HID / 触摸注入 === -->
-	<key>com.apple.private.hid.client.event-dispatch</key>
+	<key>proc_info-allow</key>
 	<true/>
+
+	<!-- === HID / IOKit 触摸 === -->
 	<key>com.apple.private.hid.client</key>
 	<true/>
 	<key>com.apple.private.hid.client.event</key>
@@ -42,82 +48,28 @@
 		<string>*</string>
 	</array>
 
-	<!-- === SpringBoard / 覆盖窗 / 后台 === -->
-	<key>com.apple.springboard.launchapplications</key>
-	<true/>
-	<key>com.apple.springboard.CFUserNotification</key>
-	<true/>
+	<!-- === SpringBoard / 覆盖窗 / Mach 服务 === -->
 	<key>com.apple.springboard.accessibility-window-hosting</key>
 	<true/>
 	<key>com.apple.private.accessibility.window-hosting</key>
 	<true/>
-	<key>com.apple.frontboard.launchapplications</key>
-	<true/>
-	<key>com.apple.frontboard.shutdown</key>
-	<true/>
-	<key>com.apple.frontboard.system-service</key>
-	<true/>
-	<key>com.apple.private.frontboard.scene-management</key>
-	<true/>
-	<key>com.apple.backboard.client</key>
-	<true/>
+	<key>com.apple.security.exception.mach-lookup.global-name</key>
+	<array>
+		<string>com.apple.springboard</string>
+		<string>com.apple.backboard</string>
+		<string>com.apple.frontboard</string>
+	</array>
 
-	<!-- === RunningBoard / 进程管理 === -->
-	<key>com.apple.runningboard.assertions.webkit</key>
-	<true/>
-	<key>com.apple.runningboard.assertions.frontboard</key>
-	<true/>
-	<key>com.apple.runningboard.primitiveattribute</key>
-	<true/>
-	<key>com.apple.multitasking.systemappassertions</key>
-	<true/>
-
-	<!-- === 内核 / 内存 / 调试 === -->
-	<key>com.apple.developer.kernel.extended-virtual-addressing</key>
-	<true/>
-	<key>com.apple.developer.kernel.increased-memory-limit</key>
-	<true/>
-	<key>com.apple.private.kernel.jetsam</key>
-	<true/>
-	<key>com.apple.private.memorystatus</key>
-	<true/>
-	<key>com.apple.security.cs.debugger</key>
-	<true/>
-	<key>com.apple.security.cs.disable-library-validation</key>
-	<true/>
-	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-	<true/>
-	<key>com.apple.security.cs.allow-jit</key>
-	<true/>
-	<key>com.apple.private.skip-library-validation</key>
-	<true/>
-
-	<!-- === QuartzCore / Metal 渲染 === -->
-	<key>com.apple.QuartzCore.displayable-context</key>
-	<true/>
-	<key>com.apple.QuartzCore.secure-mode</key>
-	<true/>
-
-	<!-- === TCC / 隐私 === -->
+	<!-- === TCC 隐私 === -->
 	<key>com.apple.private.tcc.allow</key>
 	<array>
 		<string>kTCCServiceAll</string>
 	</array>
 
-	<!-- === 网络 === -->
-	<key>com.apple.security.network.client</key>
+	<!-- === 内核稳定性 === -->
+	<key>com.apple.private.kernel.jetsam</key>
 	<true/>
-
-	<!-- === 存储 === -->
-	<key>com.apple.private.security.storage-exempt.heritable</key>
-	<true/>
-	<key>com.apple.private.security.storage.AppBundles</key>
-	<true/>
-
-	<!-- === 其他 Apple 私有权限 === -->
-	<key>com.apple.private.persona-mgmt</key>
-	<true/>
-	<key>com.apple.private.mobileinstall.allowedSPI</key>
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
 	<true/>
 </dict>
 </plist>
