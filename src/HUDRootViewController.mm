@@ -165,8 +165,8 @@ static BOOL g_imGuiInitialized = NO;
                 gMetalLayer.opaque,
                 NSStringFromCGSize(gMetalLayer.drawableSize));
         // contextId 心跳 (需要 HUDMainWindow 暴露 _contextId)
-        extern unsigned int hudWindowContextId(void);
-        extern unsigned int touchWindowContextId(void);
+        extern "C" unsigned int hudWindowContextId(void);
+        extern "C" unsigned int touchWindowContextId(void);
         HUD_LOG(@"[DIAG f#%d] hudCtx=%u touchCtx=%u", diagCount,
                 hudWindowContextId(), touchWindowContextId());
     }
