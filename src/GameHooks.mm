@@ -291,9 +291,6 @@ int hooks_scan_offsets(void) {
 
     // Delta Force UE4 特征扫描
     // GWorld 模式: 搜索对 GEngine->GameViewport->World 的引用
-    // 特征: 全局指针 + 虚表偏移 + UWorld 结构验证
-
-    uint64_t textEnd = gameBase + 0x20000000;
 
     // 扫描 GWorld 引用模式 (mov x, #GWorld_page; ldr x, [x, #offset])
     // ARM64: 通常通过 ADRP + LDR 加载全局指针
@@ -996,43 +993,44 @@ int hooks_bypass_ptrace(void) {
     // 但游戏可能有其他反调试检测 (sysctl检查, dyld检查)
 
     // 检查是否有异常端口注册
-    mach_port_t exceptionPort = MACH_PORT_NULL;
-    task_get_exception_ports(mach_task_self(),
-                              EXC_MASK_ALL,
-                              NULL,
-                              NULL,
-                              NULL,
-                              &exceptionPort);
+    exception_mask_t oldMasks[EXC_TYPES_COUNT];
+    mach_msg_type_number_t oldMasksCnt = 0;
+    exception_handler_t oldHandlers[EXC_TYPES_COUNT];
+    exception_behavior_t oldBehaviors[EXC_TYPES_COUNT];
+    thread_state_flavor_t oldFlavors[EXC_TYPES_COUNT];
 
-    if (exceptionPort != MACH_PORT_NULL) {
+    kern_return_t kr = task_get_exception_ports(mach_task_self(),
+                                                 EXC_MASK_ALL,
+                                                 oldMasks,
+                                                 &oldMasksCnt,
+                                                 oldHandlers,
+                                                 oldBehaviors,
+                                                 oldFlavors);
+
+    if (kr == KERN_SUCCESS && oldMasksCnt > 0) {
         // 有调试器附加, 移除它
         task_swap_exception_ports(mach_task_self(),
                                    EXC_MASK_ALL,
                                    MACH_PORT_NULL,
                                    EXCEPTION_DEFAULT,
                                    THREAD_STATE_NONE,
-                                   NULL, 0,
-                                   NULL, NULL);
-        HOOKS_LOG(@"Removed debug exception port");
+                                   oldMasks,
+                                   &oldMasksCnt,
+                                   oldHandlers,
+                                   oldBehaviors,
+                                   oldFlavors);
+        HOOKS_LOG(@"Removed debug exception ports (count=%u)", oldMasksCnt);
     }
 
     return 0;
 }
 
 int hooks_spoof_process_name(void) {
-    // 在 proc 表中修改进程名称, 防止反作弊通过进程名检测
-    // 这在 TrollStore 下可能受限, 但可以尝试
-    if (g_gameTask == MACH_PORT_NULL) return -1;
-
-    // 写入伪装进程名 (游戏进程内修改)
-    // 通过 sysctl 修改进程 comm 字段
-    // kern.proc.name 是受限的, 需要 root
-    // 在 TrollStore 下可以使用 setproctitle() 修改自己的名称
-
-    const char *spoofedName = "SpringBoard";
-    setproctitle("%s", spoofedName);
-
-    HOOKS_LOG(@"Process name spoofed");
+    // iOS 不支持 setproctitle() — 仅为兼容性存根
+    // 进程名伪装在 TrollStore 下不可行 (无 root/越狱)
+    // 反作弊检测进程名: 可将 Stocks -> SpringBoard 写入 /proc/pid/comm
+    // 但这需要 root 权限, TrollStore 无法实现
+    HOOKS_LOG(@"Process name spoof skipped (not available on iOS)");
     return 0;
 }
 
