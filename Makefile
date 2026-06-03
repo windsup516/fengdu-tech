@@ -95,7 +95,7 @@ after-package::
 	@ls -la /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/ 2>/dev/null || echo "  Frameworks/ MISSING"
 	@# === 编译 + 捆绑 RootHelper ===
 	@echo "==> Compiling RootHelper..."
-	@CLANG=$$(which clang 2>/dev/null || echo ""); \
+	@CLANG=$$(xcrun --sdk iphoneos --find clang 2>/dev/null || ls $(THEOS)/toolchain/*/iphone/bin/clang 2>/dev/null | head -1 || which clang 2>/dev/null || echo ""); \
 	if [ -z "$$CLANG" ]; then \
 		echo "FATAL: clang not found in PATH"; \
 	else \
@@ -143,9 +143,9 @@ after-package::
 	@if [ -d Resources ]; then cp -r Resources/* /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@# === 编译 DFOverlay.dylib (注入游戏进程的渲染覆盖层) ===
 	@echo "==> Building DFOverlay.dylib..."
-	@CLANG=$$(which clang 2>/dev/null || echo ""); \
+	@CLANG=$$(xcrun --sdk iphoneos --find clang 2>/dev/null || ls $(THEOS)/toolchain/*/iphone/bin/clang 2>/dev/null | head -1 || which clang 2>/dev/null || echo ""); \
 	if [ -z "$$CLANG" ]; then \
-		echo "WARNING: clang not found, DFOverlay.dylib NOT built"; \
+		echo "FATAL: clang not found -- DFOverlay.dylib will NOT be in IPA"; \
 	else \
 		SDK=$$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || echo ""); \
 		if [ -z "$$SDK" ] || [ ! -d "$$SDK" ]; then \
@@ -157,7 +157,7 @@ after-package::
 			done; \
 		fi; \
 		if [ -z "$$SDK" ] || [ ! -d "$$SDK" ]; then \
-			echo "WARNING: No iOS SDK for dylib build"; \
+			echo "FATAL: No iOS SDK -- DFOverlay.dylib will NOT be in IPA"; \
 		else \
 			echo "Building DFOverlay.dylib with SDK: $$SDK"; \
 			DYLIBSRC="dylib/DFCheatMain.mm \
@@ -180,7 +180,7 @@ after-package::
 			echo "  $$DYLIBCMD"; \
 			$$DYLIBCMD 2>&1; DYLIB_EXIT=$$?; \
 			if [ $$DYLIB_EXIT -ne 0 ]; then \
-				echo "WARNING: DFOverlay.dylib build failed (exit=$$DYLIB_EXIT)"; \
+				echo "FATAL: DFOverlay.dylib build FAILED (exit=$$DYLIB_EXIT)"; \
 			elif [ -f /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib ]; then \
 				echo "DFOverlay.dylib built OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib) bytes"; \
 			fi; \
