@@ -1,6 +1,6 @@
 // DFFramebufferDescriptor.m — Framebuffer pass configuration implementation
 
-#import "DFFramebufferDescriptor.h"
+#import "FramebufferDescriptor.h"
 
 @implementation DFFramebufferDescriptor
 

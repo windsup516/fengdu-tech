@@ -1,7 +1,7 @@
 // DFMetalContext.m — Singleton Metal device + buffer pool + font texture
 // Matches 太阳神 DFMetalContext for GPU resource management
 
-#import "DFMetalContext.h"
+#import "MetalContext.h"
 #import <MetalKit/MetalKit.h>
 #import <mach/mach_time.h>
 

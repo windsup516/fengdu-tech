@@ -2,7 +2,7 @@
 // Matches 太阳神 DFMetalBuffer for buffer pool management
 
 #import <QuartzCore/QuartzCore.h>
-#import "DFMetalBuffer.h"
+#import "MetalBuffer.h"
 
 @implementation DFMetalBuffer
 
