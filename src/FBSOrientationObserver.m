@@ -82,6 +82,8 @@
                                                object:nil];
 
     // Also observe screen size changes (external display, etc.)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(screenSizeChanged:)
                                                  name:UIScreenDidConnectNotification
@@ -90,6 +92,7 @@
                                              selector:@selector(screenSizeChanged:)
                                                  name:UIScreenModeDidChangeNotification
                                                object:nil];
+#pragma clang diagnostic pop
 }
 
 - (void)stopObserving {
