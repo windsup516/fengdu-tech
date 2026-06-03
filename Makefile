@@ -7,6 +7,8 @@ TARGET = iphone:16.5
 DEBUG = 0
 FINAL_PACKAGE = 1
 
+SUBPROJECTS = dylib
+
 include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = Stocks
@@ -95,45 +97,41 @@ after-package::
 	@ls -la /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/ 2>/dev/null || echo "  Frameworks/ MISSING"
 	@# === 编译 + 捆绑 RootHelper ===
 	@echo "==> Compiling RootHelper..."
-	@CLANG=$$(xcrun --sdk iphoneos --find clang 2>/dev/null || ls $(THEOS)/toolchain/*/iphone/bin/clang 2>/dev/null | head -1 || which clang 2>/dev/null || echo ""); \
+	@CLANG=$$(find $(THEOS)/toolchain -name clang -type f 2>/dev/null | head -1 || xcrun --sdk iphoneos --find clang 2>/dev/null || which clang 2>/dev/null || echo ""); \
 	if [ -z "$$CLANG" ]; then \
-		echo "FATAL: clang not found in PATH"; \
+		echo "WARNING: clang not found, RootHelper skipped"; \
 	else \
-		echo "clang: $$CLANG"; \
 		SDK=$$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || echo ""); \
-		if [ -z "$$SDK" ]; then \
+		if [ -z "$$SDK" ] || [ ! -d "$$SDK" ]; then \
 			for try_sdk in \
 				"$(THEOS)/sdks/iPhoneOS16.5.sdk" \
 				"$(THEOS)/sdks/iPhoneOS16.0.sdk" \
 				"$(THEOS)/sdks/iPhoneOS15.0.sdk" \
-				"/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk" \
-				"/Applications/Xcode_16.2.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"; do \
+				"/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"; do \
 				if [ -d "$$try_sdk" ]; then SDK="$$try_sdk"; break; fi; \
 			done; \
 		fi; \
 		if [ -z "$$SDK" ] || [ ! -d "$$SDK" ]; then \
-			echo "WARNING: No iOS SDK found (tried xcrun + Theos + Xcode paths)"; \
+			echo "WARNING: No iOS SDK found"; \
 		else \
-			echo "SDK: $$SDK"; \
-			echo "Compiling: src/RootHelper.m -> RootHelper"; \
-			COMPILE_CMD="$$CLANG -arch arm64 -isysroot $$SDK -miphoneos-version-min=13.0 \
+			$$CLANG -arch arm64 -isysroot "$$SDK" -miphoneos-version-min=13.0 \
 				-fobjc-arc -Iinclude -I$(THEOS)/include \
 				-o /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper \
-				src/RootHelper.m -framework Foundation -lobjc"; \
-			echo "  $$COMPILE_CMD"; \
-			$$COMPILE_CMD 2>&1; COMPILE_EXIT=$$?; \
-			if [ $$COMPILE_EXIT -ne 0 ]; then \
-				echo "WARNING: RootHelper compile failed (exit=$$COMPILE_EXIT)"; \
-			elif [ -f /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper ]; then \
-				echo "RootHelper compiled OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper) bytes"; \
+				src/RootHelper.m -framework Foundation -lobjc 2>&1; \
+			if [ -f /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper ]; then \
 				chmod +x /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper; \
-			else \
-				echo "WARNING: RootHelper output file not found after compilation"; \
+				echo "RootHelper OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/RootHelper) bytes"; \
 			fi; \
 		fi; \
 	fi
 	@# === 捆绑 ldid (iOS arm64, 来自红狼定制 TrollStitch) ===
-	@if [ -f tools/ldid_ios ]; then 		cp tools/ldid_ios /tmp/Stocks.tipa.work/Payload/Stocks.app/ldid; 		chmod +x /tmp/Stocks.tipa.work/Payload/Stocks.app/ldid; 		echo "ldid (iOS arm64) bundled OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/ldid) bytes"; 	else 		echo "WARNING: tools/ldid_ios not found, ldid NOT bundled"; 	fi
+	@if [ -f tools/ldid_ios ]; then \
+		cp tools/ldid_ios /tmp/Stocks.tipa.work/Payload/Stocks.app/ldid; \
+		chmod +x /tmp/Stocks.tipa.work/Payload/Stocks.app/ldid; \
+		echo "ldid (iOS arm64) bundled OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/ldid) bytes"; \
+	else \
+		echo "WARNING: tools/ldid_ios not found, ldid NOT bundled"; \
+	fi
 	@cp Info.plist /tmp/Stocks.tipa.work/Payload/Stocks.app/
 	@for f in AppIcon60x60@2x.png AppIcon76x76@2x~ipad.png Assets.car PkgInfo; do \
 		if [ -f "$$f" ]; then cp "$$f" /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi; \
@@ -141,50 +139,18 @@ after-package::
 	@if [ -d Base.lproj ]; then cp -r Base.lproj /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@if [ -d Frameworks ]; then cp -r Frameworks /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@if [ -d Resources ]; then cp -r Resources/* /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
-	@# === 编译 DFOverlay.dylib (注入游戏进程的渲染覆盖层) ===
-	@echo "==> Building DFOverlay.dylib..."
-	@CLANG=$$(xcrun --sdk iphoneos --find clang 2>/dev/null || ls $(THEOS)/toolchain/*/iphone/bin/clang 2>/dev/null | head -1 || which clang 2>/dev/null || echo ""); \
-	if [ -z "$$CLANG" ]; then \
-		echo "FATAL: clang not found -- DFOverlay.dylib will NOT be in IPA"; \
+	@# === 捆绑 DFOverlay.dylib (由 Theos 子项目编译) ===
+	@echo "==> Copying DFOverlay.dylib..."
+	@DYLIB=$$(find dylib/.theos -name DFOverlay.dylib -type f 2>/dev/null | head -1); \
+	if [ -z "$$DYLIB" ]; then \
+		DYLIB=$$(find .theos -name DFOverlay.dylib -type f 2>/dev/null | head -1); \
+	fi; \
+	if [ -z "$$DYLIB" ]; then \
+		echo "FATAL: DFOverlay.dylib NOT built by subproject"; \
+		exit 1; \
 	else \
-		SDK=$$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || echo ""); \
-		if [ -z "$$SDK" ] || [ ! -d "$$SDK" ]; then \
-			for try_sdk in \
-				"$(THEOS)/sdks/iPhoneOS16.5.sdk" \
-				"$(THEOS)/sdks/iPhoneOS16.0.sdk" \
-				"/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"; do \
-				if [ -d "$$try_sdk" ]; then SDK="$$try_sdk"; break; fi; \
-			done; \
-		fi; \
-		if [ -z "$$SDK" ] || [ ! -d "$$SDK" ]; then \
-			echo "FATAL: No iOS SDK -- DFOverlay.dylib will NOT be in IPA"; \
-		else \
-			echo "Building DFOverlay.dylib with SDK: $$SDK"; \
-			DYLIBSRC="dylib/DFCheatMain.mm \
-				include/imgui/imgui.cpp include/imgui/imgui_draw.cpp \
-				include/imgui/imgui_tables.cpp include/imgui/imgui_widgets.cpp \
-				include/imgui/backends/imgui_impl_metal.mm"; \
-			DYLIBCMD="$$CLANG -arch arm64 -isysroot $$SDK -miphoneos-version-min=13.0 \
-				-fobjc-arc -std=c++17 -stdlib=libc++ \
-				-Iinclude -Iinclude/imgui -Iinclude/imgui/backends -Idylib -Isrc \
-				-dynamiclib -install_name @executable_path/Frameworks/DFOverlay.dylib \
-				-Wl,-undefined,dynamic_lookup \
-				-o /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib \
-				$$DYLIBSRC \
-				-framework UIKit -framework Metal -framework MetalKit \
-				-framework CoreGraphics -framework Foundation -framework CoreText \
-				-framework IOSurface -framework QuartzCore -lz -lobjc \
-				-Wno-error=unused-const-variable -Wno-error=unused-variable \
-				-Wno-error=unused-function -Wno-error=nullability-completeness \
-				-Wno-error=incompatible-pointer-types"; \
-			echo "  $$DYLIBCMD"; \
-			$$DYLIBCMD 2>&1; DYLIB_EXIT=$$?; \
-			if [ $$DYLIB_EXIT -ne 0 ]; then \
-				echo "FATAL: DFOverlay.dylib build FAILED (exit=$$DYLIB_EXIT)"; \
-			elif [ -f /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib ]; then \
-				echo "DFOverlay.dylib built OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib) bytes"; \
-			fi; \
-		fi; \
+		cp "$$DYLIB" /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib; \
+		echo "DFOverlay.dylib OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib) bytes"; \
 	fi
 	@# === 显式重签：不依赖 Theos 内部签名，全部在这里完成 ===
 	@echo "==> Re-signing with entitlements (ldid2)..."; \
@@ -219,11 +185,11 @@ after-package::
 		fi; \
 	done; \
 	echo "=== Step 4b: strip DFOverlay.dylib signature (loaded by game process) ==="; \
-		if [ -f "$$APP_DIR/Frameworks/DFOverlay.dylib" ]; then \
-			codesign --remove-signature "$$APP_DIR/Frameworks/DFOverlay.dylib" 2>/dev/null || true; \
-			echo "  DFOverlay.dylib signature stripped — game process dlopen won't trigger AMFI"; \
-		fi; \
-		echo "=== Step 4c: ldid sign RootHelper ==="; \
+	if [ -f "$$APP_DIR/Frameworks/DFOverlay.dylib" ]; then \
+		codesign --remove-signature "$$APP_DIR/Frameworks/DFOverlay.dylib" 2>/dev/null || true; \
+		echo "  DFOverlay.dylib signature stripped — game process dlopen won't trigger AMFI"; \
+	fi; \
+	echo "=== Step 4c: ldid sign RootHelper ==="; \
 	if [ -f "$$APP_DIR/RootHelper" ]; then \
 		codesign --remove-signature "$$APP_DIR/RootHelper" 2>/dev/null || true; \
 		$$LDID -S$(CURDIR)/sign.plist "$$APP_DIR/RootHelper" 2>&1 || { echo "WARNING: RootHelper signing failed"; }; \
