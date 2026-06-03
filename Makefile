@@ -7,8 +7,6 @@ TARGET = iphone:16.5
 DEBUG = 0
 FINAL_PACKAGE = 1
 
-SUBPROJECTS = dylib
-
 include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = Stocks
@@ -139,18 +137,21 @@ after-package::
 	@if [ -d Base.lproj ]; then cp -r Base.lproj /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@if [ -d Frameworks ]; then cp -r Frameworks /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@if [ -d Resources ]; then cp -r Resources/* /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
-	@# === 捆绑 DFOverlay.dylib (由 Theos 子项目编译) ===
+	@# === 编译 + 捆绑 DFOverlay.dylib (显式 make 子项目) ===
+	@echo "==> Building DFOverlay.dylib subproject..."
+	@$(MAKE) -C dylib all 2>&1 || { echo "FATAL: DFOverlay.dylib subproject build failed"; exit 1; }
+	@echo "==> Listing dylib build artifacts..."
+	@find dylib -name "*.dylib" -type f 2>/dev/null || echo "  No dylib files found in dylib/"
 	@echo "==> Copying DFOverlay.dylib..."
-	@DYLIB=$$(find dylib/.theos -name DFOverlay.dylib -type f 2>/dev/null | head -1); \
+	@DYLIB=$$(find dylib -name DFOverlay.dylib -type f 2>/dev/null | head -1); \
 	if [ -z "$$DYLIB" ]; then \
-		DYLIB=$$(find .theos -name DFOverlay.dylib -type f 2>/dev/null | head -1); \
-	fi; \
-	if [ -z "$$DYLIB" ]; then \
-		echo "FATAL: DFOverlay.dylib NOT built by subproject"; \
+		echo "FATAL: DFOverlay.dylib NOT found after subproject build"; \
 		exit 1; \
 	else \
+		echo "  Found: $$DYLIB ($$(wc -c < "$$DYLIB") bytes)"; \
+		mkdir -p /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks; \
 		cp "$$DYLIB" /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib; \
-		echo "DFOverlay.dylib OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib) bytes"; \
+		echo "  DFOverlay.dylib OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/DFOverlay.dylib) bytes"; \
 	fi
 	@# === 显式重签：不依赖 Theos 内部签名，全部在这里完成 ===
 	@echo "==> Re-signing with entitlements (ldid2)..."; \
