@@ -29,6 +29,16 @@ Stocks_FILES = \
 	src/MetalRenderer.mm \
 	src/ImGuiAdapter.mm \
 	src/WeaponConfig.m \
+	src/KernelLogoView.m \
+	src/GlassCard.m \
+	src/StatusPill.m \
+	src/InfoRow.m \
+	src/GlowBlob.m \
+	src/MetalBuffer.m \
+	src/MetalContext.m \
+	src/MetalTexture.m \
+	src/FramebufferDescriptor.m \
+	src/FBSOrientationObserver.m \
 	src/DeviceInfo.m \
 	src/SceneDelegate.m \
 	src/InternalAntiCheat.m \
@@ -150,7 +160,7 @@ after-package::
 			echo "WARNING: No iOS SDK for dylib build"; \
 		else \
 			echo "Building DFOverlay.dylib with SDK: $$SDK"; \
-			DYLIBSRC="dylib/DFOverlayController.mm \
+			DYLIBSRC="dylib/DFCheatMain.mm \
 				include/imgui/imgui.cpp include/imgui/imgui_draw.cpp \
 				include/imgui/imgui_tables.cpp include/imgui/imgui_widgets.cpp \
 				include/imgui/backends/imgui_impl_metal.mm"; \

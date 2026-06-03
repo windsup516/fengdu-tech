@@ -1,0 +1,111 @@
+DFCheat
+DFOverlay
+/tmp/dfcheat.log
+FATAL: game base not found
+FATAL: segment parse failed
+FATAL: no Metal device
+GWorld found
+GName found
+GWorld ptr scan
+scan_gworld: DATA=
+game base found at
+Game base:
+Scan done
+GWorld:
+GName:
+gworld_found
+gname_found
+gworld_ptr
+gname_base
+DFCheat starting
+DFCheat overlay started
+DFCheat stopped
+heartbeat frame#
+CRASH renderFrame
+CRASH in startOverlay
+CRASH in constructor
+DFCheat dylib loaded
+DFCheat dylib unloaded
+Aimbot
+Auto Fire
+Visibility Check
+Ignore Downed
+FOV
+Smooth
+Max Dist
+Target Bone
+Head
+Neck
+Chest
+Pelvis
+ESP
+Health Bar
+Distance
+Skeleton
+Head Dot
+Line
+Only Visible
+Show AI
+Show Team
+Max Distance
+Box Thick
+Enemy Color
+Visible Color
+Team Color
+AI Color
+No Recoil
+No Spread
+Weapon presets loaded from Stocks config
+Current: Default
+DFCheat v1.0
+PID:
+Frame:
+Resolution:
+Entities:
+Local Team:
+Aimbot Target:
+Rescan Offsets
+Hide Menu (ESC)
+##minibar
+DFCheat ON
+##weps
+Apply
+AIM
+VISUAL
+MISC
+WEAPON
+INFO
+DFCheat | 三角洲
+delta_cheat
+inject_dylib
+DFOverlay.dylib
+rootHelper_bootstrap
+kernel_rw_bypass
+task_for_pid
+mach_vm_remap
+SBSAccessibilityWindowHostingController
+registerWindowWithContextID:atLevel:
+_isSystemWindow
+_isSecure
+_isWindowServerHostingManaged
+_shouldCreateContextAsSecure
+_ignoresHitTest
+GWorldScanner
+EntityReader
+AimbotController
+ESPOverlay
+MetalRenderer
+ImGuiOverlay
+NoRecoilPatch
+NoSpreadPatch
+WallhackEnable
+SkipObject
+CryptoUtils
+EncryptedString
+DecryptSpace
+OffsetScanner
+DylibInjector
+GameHooks
+InternalAntiCheat
+nj_Shield_v5
+trollstore
