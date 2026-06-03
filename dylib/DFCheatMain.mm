@@ -513,7 +513,7 @@ static void find_best_target(float sw, float sh, float vp[16]) {
     self.metalLayer.drawableSize = CGSizeMake(self.screenW * scale, self.screenH * scale);
 
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-    if (!device) { df_log(DecryptCString(ES_FATAL__no_Metal_device)) return; }
+    if (!device) { df_log(DecryptCString(ES_FATAL__no_Metal_device)); return; }
     self.metalLayer.device = device;
     self.cmdQueue = [device newCommandQueue];
 
@@ -604,7 +604,7 @@ static void find_best_target(float sw, float sh, float vp[16]) {
         ImGui::Begin("##minibar", NULL,
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
-        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f), DecryptCString(ES_DFCheat_ON));
+        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.4f, 1.0f), "%s", DecryptCString(ES_DFCheat_ON));
         ImGui::End();
     }
 
@@ -810,8 +810,8 @@ static void find_best_target(float sw, float sh, float vp[16]) {
 }
 
 - (void)weaponTab {
-    ImGui::Text(DecryptCString(ES_Weapon_presets_loaded_from_Sto));
-    ImGui::Text(DecryptCString(ES_Current__Default));
+    ImGui::Text("%s", DecryptCString(ES_Weapon_presets_loaded_from_Stocks_config));
+    ImGui::Text("%s", DecryptCString(ES_Current__Default));
     ImGui::Separator();
     static int sel = 0;
     const char *weps[] = {"AKM","QBZ95-1","QBZ-17","AKS-74U","ASH-12",
@@ -823,7 +823,7 @@ static void find_best_target(float sw, float sh, float vp[16]) {
 }
 
 - (void)infoTab {
-    ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.6f, 1.0f), DecryptCString(ES_DFCheat_v1_0));
+    ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.6f, 1.0f), "%s", DecryptCString(ES_DFCheat_v1_0));
     ImGui::Text(DecryptCString(ES_PID_), getpid());
     ImGui::Text(DecryptCString(ES_Frame_), self.frameCount);
     ImGui::Text(DecryptCString(ES_Resolution_), self.screenW, self.screenH);

@@ -19,7 +19,8 @@ DFOverlay_FILES = \
 DFOverlay_CFLAGS = -fobjc-arc -std=c++17 -stdlib=libc++ \
 	-I../include -I../include/imgui -I../include/imgui/backends -I. -I../src \
 	-Wno-error=unused-const-variable -Wno-error=unused-variable -Wno-error=unused-function \
-	-Wno-error=nullability-completeness -Wno-error=incompatible-pointer-types
+	-Wno-error=nullability-completeness -Wno-error=incompatible-pointer-types \
+	-Wno-error=format-security
 DFOverlay_CCFLAGS = -std=c++17 -stdlib=libc++ \
 	-I../include -I../include/imgui -I../include/imgui/backends -I. -I../src
 DFOverlay_LDFLAGS = -dynamiclib -install_name @executable_path/Frameworks/DFOverlay.dylib \
