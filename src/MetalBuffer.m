@@ -1,10 +1,10 @@
-// MetalBuffer.m — Reusable Metal buffer with lastReuseTime tracking
-// Matches 太阳神 MetalBuffer for buffer pool management
+// DFMetalBuffer.m — Reusable Metal buffer with lastReuseTime tracking
+// Matches 太阳神 DFMetalBuffer for buffer pool management
 
 #import <QuartzCore/QuartzCore.h>
-#import "MetalBuffer.h"
+#import "DFMetalBuffer.h"
 
-@implementation MetalBuffer
+@implementation DFMetalBuffer
 
 - (instancetype)initWithBuffer:(id<MTLBuffer>)buffer {
     self = [super init];
@@ -16,7 +16,7 @@
 }
 
 + (instancetype)bufferWithMTLBuffer:(id<MTLBuffer>)buffer {
-    return [[MetalBuffer alloc] initWithBuffer:buffer];
+    return [[DFMetalBuffer alloc] initWithBuffer:buffer];
 }
 
 - (void)setLastReuseTime:(NSTimeInterval)time {

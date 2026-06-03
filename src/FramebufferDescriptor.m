@@ -1,11 +1,11 @@
-// FramebufferDescriptor.m — Framebuffer pass configuration implementation
+// DFFramebufferDescriptor.m — Framebuffer pass configuration implementation
 
-#import "FramebufferDescriptor.h"
+#import "DFFramebufferDescriptor.h"
 
-@implementation FramebufferDescriptor
+@implementation DFFramebufferDescriptor
 
 + (instancetype)defaultDescriptor {
-    FramebufferDescriptor *desc = [[FramebufferDescriptor alloc] init];
+    DFFramebufferDescriptor *desc = [[DFFramebufferDescriptor alloc] init];
     desc.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
     desc.depthPixelFormat = MTLPixelFormatDepth32Float;
     desc.stencilPixelFormat = MTLPixelFormatInvalid;

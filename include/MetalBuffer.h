@@ -4,7 +4,7 @@
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
 
-@interface MetalBuffer : NSObject
+@interface DFMetalBuffer : NSObject
 
 @property (nonatomic, strong, readonly) id<MTLBuffer> buffer;
 @property (nonatomic, assign) NSTimeInterval lastReuseTime;

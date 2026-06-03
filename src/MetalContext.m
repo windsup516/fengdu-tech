@@ -1,7 +1,7 @@
-// MetalContext.m — Singleton Metal device + buffer pool + font texture
-// Matches 太阳神 MetalContext for GPU resource management
+// DFMetalContext.m — Singleton Metal device + buffer pool + font texture
+// Matches 太阳神 DFMetalContext for GPU resource management
 
-#import "MetalContext.h"
+#import "DFMetalContext.h"
 #import <MetalKit/MetalKit.h>
 #import <mach/mach_time.h>
 
@@ -9,21 +9,21 @@
 #define BUFFER_POOL_MAX_SIZE 16
 #define BUFFER_POOL_MAX_AGE   5.0  // seconds before recycling
 
-@interface MetalContext ()
+@interface DFMetalContext ()
 @property (nonatomic, strong, readwrite) id<MTLDevice> device;
 @property (nonatomic, strong, readwrite) id<MTLCommandQueue> commandQueue;
 @property (nonatomic, strong, readwrite) id<MTLTexture> fontTexture;
-@property (nonatomic, strong) NSMutableArray<MetalBuffer *> *bufferPool;
+@property (nonatomic, strong) NSMutableArray<DFMetalBuffer *> *bufferPool;
 @property (nonatomic, strong) dispatch_queue_t poolQueue;
 @end
 
-@implementation MetalContext
+@implementation DFMetalContext
 
 + (instancetype)shared {
-    static MetalContext *inst = nil;
+    static DFMetalContext *inst = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        inst = [[MetalContext alloc] init];
+        inst = [[DFMetalContext alloc] init];
     });
     return inst;
 }
@@ -41,7 +41,7 @@
 - (void)makeDeviceObjects {
     _device = MTLCreateSystemDefaultDevice();
     if (!_device) {
-        NSLog(@"[MetalContext] FATAL: No Metal device available");
+        NSLog(@"[DFMetalContext] FATAL: No Metal device available");
         return;
     }
     _commandQueue = [_device newCommandQueue];
@@ -69,16 +69,16 @@
     }
 }
 
-- (MetalBuffer *)dequeueReusableBufferOfLength:(NSUInteger)length {
+- (DFMetalBuffer *)dequeueReusableBufferOfLength:(NSUInteger)length {
     if (length == 0) return nil;
 
-    __block MetalBuffer *found = nil;
+    __block DFMetalBuffer *found = nil;
 
     dispatch_sync(_poolQueue, ^{
         NSTimeInterval now = CACurrentMediaTime();
 
         // Try to find a recyclable buffer of suitable size
-        for (MetalBuffer *mb in self->_bufferPool) {
+        for (DFMetalBuffer *mb in self->_bufferPool) {
             if (mb.buffer.length >= length && (now - mb.lastReuseTime) > 0.5) {
                 found = mb;
                 break;
@@ -100,10 +100,10 @@
                                              options:MTLResourceStorageModeShared];
     if (!buf) return nil;
 
-    return [MetalBuffer bufferWithMTLBuffer:buf];
+    return [DFMetalBuffer bufferWithMTLBuffer:buf];
 }
 
-- (void)recycleBuffer:(MetalBuffer *)metalBuffer {
+- (void)recycleBuffer:(DFMetalBuffer *)metalBuffer {
     if (!metalBuffer) return;
 
     dispatch_async(_poolQueue, ^{

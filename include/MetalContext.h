@@ -5,7 +5,7 @@
 #import <Foundation/Foundation.h>
 #import "MetalBuffer.h"
 
-@interface MetalContext : NSObject
+@interface DFMetalContext : NSObject
 
 @property (nonatomic, strong, readonly) id<MTLDevice> device;
 @property (nonatomic, strong, readonly) id<MTLCommandQueue> commandQueue;
@@ -15,6 +15,6 @@
 
 - (void)makeDeviceObjects;
 - (void)makeFontTexture;
-- (MetalBuffer *)dequeueReusableBufferOfLength:(NSUInteger)length;
+- (DFMetalBuffer *)dequeueReusableBufferOfLength:(NSUInteger)length;
 
 @end

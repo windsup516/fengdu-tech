@@ -4,7 +4,7 @@
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
 
-@interface FramebufferDescriptor : NSObject
+@interface DFFramebufferDescriptor : NSObject
 
 @property (nonatomic, assign) MTLPixelFormat colorPixelFormat;
 @property (nonatomic, assign) MTLPixelFormat depthPixelFormat;
