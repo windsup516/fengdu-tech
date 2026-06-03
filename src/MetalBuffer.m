@@ -1,6 +1,7 @@
 // MetalBuffer.m — Reusable Metal buffer with lastReuseTime tracking
 // Matches 太阳神 MetalBuffer for buffer pool management
 
+#import <QuartzCore/QuartzCore.h>
 #import "MetalBuffer.h"
 
 @implementation MetalBuffer
