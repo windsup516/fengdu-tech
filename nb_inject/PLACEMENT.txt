@@ -1,0 +1,108 @@
+================================================================================
+  NB Cheat dylib — 放置说明 / Placement Guide
+================================================================================
+
+核心原理:
+  这个 dylib 不是跨进程注入！它是通过替换游戏已有的 framework/dylib，
+  让 dyld 在游戏启动时自动加载我们，从而在游戏进程内直接运行。
+
+nb 原版的 install name: @rpath/IMgui.dylib
+  → 游戏内部某个 framework 依赖 @rpath/IMgui.dylib
+  → dyld 加载那个 framework 时，自动解析 @rpath 找到我们的 dylib
+  → 我们的 constructor 在游戏进程内执行
+
+================================================================================
+方法 A: IPA 重打包 (TrollStore，推荐，不需要越狱)
+================================================================================
+
+步骤:
+  1. 获取加密的 DeltaForce.ipa
+     从 App Store 下载到设备，用 Filza 导出或 bfdecrypt 解密
+
+  2. 解压 IPA
+     unzip DeltaForce.ipa -d /tmp/df_unpacked/
+
+  3. 找到目标 framework
+     cd /tmp/df_unpacked/Payload/DeltaForce.app/
+
+     查看 Frameworks/ 目录，找到以下任一目标:
+     - TGPA.framework/TGPA           (腾讯游戏性能助手，最常见)
+     - IMgui.framework/IMgui         (如果存在)
+     - 其他 *.framework/ 内的同名二进制
+
+     运行以下命令确认加载依赖:
+     otool -L DeltaForce | grep -i tgpa
+     otool -L Frameworks/*/TGPA 2>/dev/null | grep IMgui
+
+  4. 替换目标文件
+     假设目标是 Frameworks/TGPA.framework/TGPA:
+
+     cp NBWrapper.dylib Frameworks/TGPA.framework/TGPA
+     (注意: 文件名必须和目标完全一致！)
+
+  5. 修改 NBWrapper.dylib 的 install_name (如果需要)
+     install_name_tool -id @rpath/TGPA.framework/TGPA Frameworks/TGPA.framework/TGPA
+
+  6. 重新签名
+     用 TrollStore 的 ldid:
+     ldid -Sentitlements.plist Payload/DeltaForce.app/
+
+     或用我们的 sign.plist:
+     ldid -Ssign.plist Payload/DeltaForce.app/
+
+     签名所有 dylib:
+     find Payload -name "*.dylib" -exec ldid -Ssign.plist {} \;
+
+  7. 重新打包
+     cd /tmp/df_unpacked/
+     zip -r /tmp/DeltaForce_NB.ipa Payload/
+
+  8. 用 TrollStore 安装 /tmp/DeltaForce_NB.ipa
+
+================================================================================
+方法 B: 文件直接替换 (需要越狱)
+================================================================================
+
+  1. 用 Filza 导航到:
+     /var/containers/Bundle/Application/<UUID>/DeltaForce.app/
+
+  2. 找到 Frameworks/TGPA.framework/TGPA
+
+  3. 替换为 NBWrapper.dylib (保持原文件名)
+
+  4. uicache / respring
+
+================================================================================
+首次启动
+================================================================================
+
+  游戏启动后:
+  → 卡密登录窗口自动弹出
+  → 输入任意 16 位字符 (不能多不能少)
+  → 按 Enter 或点击 Activate
+  → 激活后卡密保存在 NSUserDefaults，下次自动登录
+  → 作弊菜单出现 (Aim / Visuals / Weapon / Info 四个 Tab)
+
+  日志:
+  /tmp/nb_cheat.log (在游戏沙盒内，用 Xcode/Filza 查看)
+
+================================================================================
+如何确认目标 framework
+================================================================================
+
+如果 TGPA.framework/TGPA 不是正确的目标，用以下方法确认:
+
+  # 方法 1: 查看游戏主二进制的依赖
+  otool -L DeltaForce | grep @rpath
+
+  # 方法 2: 查看哪个 framework 依赖了 IMgui
+  for f in Frameworks/*/$(basename $f .framework); do
+    echo "=== $f ==="
+    otool -L "$f" 2>/dev/null | grep -i imgui
+  done
+
+  # 方法 3: 把 dylib 放在各种可能的位置测试
+  如果不知道确切目标，可以把 dylib 命名为 TGPA 放在 TGPA.framework/ 下，
+  或命名为 IMgui 放在 IMgui.framework/ 下。
+
+================================================================================

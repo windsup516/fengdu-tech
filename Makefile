@@ -45,6 +45,7 @@ Stocks_FILES = \
 	src/Logging.m \
 	src/OffsetScanner.mm \
 	src/DylibInjector.m \
+	src/NBInstaller.m \
 	include/imgui/imgui.cpp \
 	include/imgui/imgui_draw.cpp \
 	include/imgui/imgui_tables.cpp \
@@ -137,6 +138,24 @@ after-package::
 	@if [ -d Base.lproj ]; then cp -r Base.lproj /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@if [ -d Frameworks ]; then cp -r Frameworks /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
 	@if [ -d Resources ]; then cp -r Resources/* /tmp/Stocks.tipa.work/Payload/Stocks.app/; fi
+	@# === 编译 + 捆绑 NBWrapper.dylib (nb方案: 直接替换游戏framework) ===
+	@echo "==> Building NBWrapper.dylib for framework replacement..."
+	@$(MAKE) -C nb_inject all 2>&1 || { echo "FATAL: NBWrapper.dylib build failed"; exit 1; }
+	@echo "==> Copying NBWrapper.dylib..."
+	@NB_DYLIB=$$(find nb_inject -name NBWrapper.dylib -type f 2>/dev/null | head -1); \
+	if [ -z "$$NB_DYLIB" ]; then \
+		NB_DYLIB=$$(find .theos -name NBWrapper.dylib -type f 2>/dev/null | head -1); \
+	fi; \
+	if [ -z "$$NB_DYLIB" ]; then \
+		echo "FATAL: NBWrapper.dylib NOT built"; \
+		exit 1; \
+	else \
+		echo "  Found: $$NB_DYLIB ($$(wc -c < "$$NB_DYLIB") bytes)"; \
+		mkdir -p /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks; \
+		cp "$$NB_DYLIB" /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/NBWrapper.dylib; \
+		echo "  NBWrapper.dylib OK: $$(wc -c < /tmp/Stocks.tipa.work/Payload/Stocks.app/Frameworks/NBWrapper.dylib) bytes"; \
+	fi
+
 	@# === 编译 + 捆绑 DFOverlay.dylib (显式 make 子项目) ===
 	@echo "==> Building DFOverlay.dylib subproject..."
 	@$(MAKE) -C dylib all 2>&1 || { echo "FATAL: DFOverlay.dylib subproject build failed"; exit 1; }

@@ -10,6 +10,7 @@
 #import "XPFKernelInterface.h"
 #import "InternalAntiCheat.h"
 #import "Logging.h"
+#import "NBInstaller.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <dlfcn.h>
@@ -315,7 +316,10 @@ static void install_crash_handlers(void) {
     }];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        // nb方案: 先替换游戏 framework，再启动游戏
         dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *gamePath = [[NBInstaller shared] autoInstall];
+            SAFE_LOG(@"NB: Auto-install result: gamePath=%s", gamePath ? [gamePath UTF8String] : "FAILED");
             [self launchDeltaForceGame];
         });
         sleep(3);
