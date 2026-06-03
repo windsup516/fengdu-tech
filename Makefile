@@ -141,9 +141,9 @@ after-package::
 	@echo "==> Building DFOverlay.dylib subproject..."
 	@$(MAKE) -C dylib all 2>&1 || { echo "FATAL: DFOverlay.dylib subproject build failed"; exit 1; }
 	@echo "==> Listing dylib build artifacts..."
-	@find dylib -name "*.dylib" -type f 2>/dev/null || echo "  No dylib files found in dylib/"
+	@find dylib .theos -name "*.dylib" -type f 2>/dev/null || echo "  No dylib files found in dylib/ or .theos/"
 	@echo "==> Copying DFOverlay.dylib..."
-	@DYLIB=$$(find dylib -name DFOverlay.dylib -type f 2>/dev/null | head -1); \
+	@DYLIB=$$(find dylib .theos -name DFOverlay.dylib -type f 2>/dev/null | head -1); \
 	if [ -z "$$DYLIB" ]; then \
 		echo "FATAL: DFOverlay.dylib NOT found after subproject build"; \
 		exit 1; \
