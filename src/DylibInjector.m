@@ -74,7 +74,7 @@ static void encode_mov64(uint32_t *out, int *ci, int rd, uint64_t val) {
 // === Core injection: write dylib into game memory, shellcode writes to file + dlopen ===
 // iOS /tmp/ is SANDBOXED per-app, so Stocks can't write a file the game can read.
 // Instead: copy dylib bytes into game memory, shellcode writes them to game's own /tmp/
-static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
+static kern_return_t inject_via_mach(pid_t pid, const char *localPath, const char *remotePath) {
     task_t remoteTask = MACH_PORT_NULL;
     kern_return_t kr;
     mach_vm_address_t remoteBase = 0;
@@ -102,9 +102,9 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
              dlopenPtr, openPtr, writePtr, closePtr);
 
     // Read dylib from local filesystem
-    FILE *df = fopen(dylibPath, "rb");
+    FILE *df = fopen(localPath, "rb");
     if (!df) {
-        SAFE_LOG(@">> fopen(%s) FAILED", dylibPath);
+        SAFE_LOG(@">> fopen(%s) FAILED", localPath);
         mach_port_deallocate(mach_task_self(), remoteTask);
         return KERN_FAILURE;
     }
@@ -121,23 +121,8 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     fclose(df);
     SAFE_LOG(@">> dylib read: %zu bytes", dylibSize);
 
-    // Strip code signature from in-memory dylib before writing to game
-    uint32_t *magic = (uint32_t *)dylibData;
-    if (*magic == MH_MAGIC_64) {
-        struct mach_header_64 *hdr = (struct mach_header_64 *)dylibData;
-        uint8_t *cmdPtr = dylibData + sizeof(struct mach_header_64);
-        for (uint32_t i = 0; i < hdr->ncmds; i++) {
-            struct load_command *lc = (struct load_command *)cmdPtr;
-            if (lc->cmd == LC_CODE_SIGNATURE) {
-                lc->cmd = 0;
-                break;
-            }
-            cmdPtr += lc->cmdsize;
-        }
-    }
-
     // Step 3: Allocate remote memory: path + dylib_data + shellcode + stack
-    size_t pathLen = strlen(dylibPath) + 1;
+    size_t pathLen = strlen(remotePath) + 1;
     size_t pathOff = 0;
     size_t dataOff = (pathLen + 0xFF) & ~0xFF; // 256-byte align
     size_t dataSize = (dylibSize + 0xFF) & ~0xFF;
@@ -154,9 +139,9 @@ static kern_return_t inject_via_mach(pid_t pid, const char *dylibPath) {
     }
     SAFE_LOG(@">> remote mem @ 0x%llx (%zu bytes)", remoteBase, allocSize);
 
-    // Step 4: Write path string
+    // Step 4: Write remote path string (game's /tmp/DFOverlay.dylib)
     kr = mach_vm_write(remoteTask, remoteBase + pathOff,
-                       (vm_offset_t)dylibPath, (mach_msg_type_number_t)pathLen);
+                       (vm_offset_t)remotePath, (mach_msg_type_number_t)pathLen);
     if (kr != KERN_SUCCESS) {
         SAFE_LOG(@"Inject: path write failed: %s", mach_error_string(kr));
         goto cleanup;
@@ -363,15 +348,14 @@ int inject_dylib_to_pid(pid_t pid, const char *dylibName) {
     // the game's sandbox container.
     const char *remotePath = "/tmp/DFOverlay.dylib";
 
-    // Method 1: Try xpf_inject_dylib from libjailbreak
+    // Method 1: Try xpf_inject_dylib from libjailbreak (kernel-level, bypasses AMFI)
     typedef int (*xpf_inject_func)(int, const char*);
     xpf_inject_func xpf_inject = (xpf_inject_func)dlsym(RTLD_DEFAULT, "xpf_inject_dylib");
     if (xpf_inject) {
-        // Copy + strip for xpf (it uses a file path)
+        // Copy dylib to /tmp/ WITHOUT stripping — xpf handles code signing itself
         NSString *tmpPath = @"/tmp/DFOverlay.dylib";
         [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil];
         [[NSFileManager defaultManager] copyItemAtPath:fwPath toPath:tmpPath error:nil];
-        strip_macho_signature([tmpPath UTF8String]);
         int ret = xpf_inject(pid, [tmpPath UTF8String]);
         if (ret == 0) {
             SAFE_LOG(@">> xpf_inject_dylib OK");
@@ -384,7 +368,7 @@ int inject_dylib_to_pid(pid_t pid, const char *dylibName) {
 
     // Method 2: Mach VM injection — writes dylib bytes into game memory,
     // shellcode writes them to game's sandboxed /tmp/ then dlopen
-    kern_return_t kr = inject_via_mach(pid, [fwPath UTF8String]);
+    kern_return_t kr = inject_via_mach(pid, [fwPath UTF8String], remotePath);
     if (kr == KERN_SUCCESS) {
         SAFE_LOG(@">> Mach VM injection OK — dylib constructor should fire now");
         return 0;

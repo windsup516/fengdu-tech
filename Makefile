@@ -185,10 +185,9 @@ after-package::
 			$$LDID -S$(CURDIR)/sign.plist "$$dylib" 2>&1 || true; \
 		fi; \
 	done; \
-	echo "=== Step 4b: strip DFOverlay.dylib signature (loaded by game process) ==="; \
+	echo "=== Step 4b: keep DFOverlay.dylib signed (xpf_inject_dylib needs valid Mach-O) ==="; \
 	if [ -f "$$APP_DIR/Frameworks/DFOverlay.dylib" ]; then \
-		codesign --remove-signature "$$APP_DIR/Frameworks/DFOverlay.dylib" 2>/dev/null || true; \
-		echo "  DFOverlay.dylib signature stripped — game process dlopen won't trigger AMFI"; \
+		echo "  DFOverlay.dylib signature kept intact for kernel injection"; \
 	fi; \
 	echo "=== Step 4c: ldid sign RootHelper ==="; \
 	if [ -f "$$APP_DIR/RootHelper" ]; then \
