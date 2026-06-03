@@ -242,7 +242,6 @@
     for (int i = 0; i < _glowBlobs.count; i++) {
         CAShapeLayer *blob = _glowBlobs[i];
         CAKeyframeAnimation *blobFloat = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation"];
-        CGPoint orig = blob.position;
         CGFloat phase = i * 2.0;
         blobFloat.values = @[
             [NSValue valueWithCGPoint:CGPointMake(0, 0)],

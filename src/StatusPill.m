@@ -43,7 +43,7 @@
     [self addSubview:_label];
 
     // Spinner (hidden by default)
-    _spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+    _spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     _spinner.transform = CGAffineTransformMakeScale(0.6, 0.6);
     _spinner.hidesWhenStopped = YES;
     [self addSubview:_spinner];
